@@ -30,6 +30,7 @@ return [
         'mastodon' => '连接你的 Mastodon 账号',
         'telegram' => '连接一个 Telegram 频道或群组',
         'discord' => '连接一个 Discord 服务器',
+        'vk' => '连接 VK 社群或个人主页',
     ],
 
     'disconnect_modal' => [
@@ -49,6 +50,22 @@ return [
         'app_password_hint' => '为保障安全，请使用<strong>应用专用密码</strong>。可前往 <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a> 创建。',
         'submit' => '连接 Bluesky',
         'submitting' => '连接中…',
+    ],
+
+    'vk' => [
+        'title' => '连接 VK',
+        'description' => '发布到社群或您自己的动态墙',
+        'access_token' => '访问令牌',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => '粘贴具有 <em>wall, photos, groups, video, offline</em> 权限的 VK <strong>用户访问令牌</strong>。VK 不再向新的 OAuth 应用授予 wall 权限,请使用您自己的 standalone 应用令牌(或 vkhost 之类的服务)。',
+        'pick_target' => '选择发布位置',
+        'target_group' => '社群',
+        'target_profile' => '个人主页',
+        'invalid_token' => 'VK 拒绝了该令牌。',
+        'invalid_target' => '所提供的令牌无法管理此动态墙。',
+        'connection_error' => '连接 VK 时出错,请重试。',
+        'submit' => '连接 VK',
+        'submitting' => '连接中...',
     ],
 
     'mastodon' => [

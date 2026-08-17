@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Підключіть акаунт Mastodon',
         'telegram' => 'Підключіть канал або групу Telegram',
         'discord' => 'Підключіть сервер Discord',
+        'vk' => 'Підключіть спільноту або профіль VK',
     ],
 
     'disconnect_modal' => [
@@ -48,6 +49,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => 'З міркувань безпеки використовуйте <strong>пароль додатка</strong>. Створіть його на <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'Підключити Bluesky',
+        'submitting' => 'Підключення...',
+    ],
+
+    'vk' => [
+        'title' => 'Підключити VK',
+        'description' => 'Публікація у спільноту або на власну стіну',
+        'access_token' => 'Ключ доступу',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Вставте <strong>користувацький ключ доступу</strong> VK із правами <em>wall, photos, groups, video, offline</em>. Новим OAuth-застосункам VK не надає право wall, тому використовуйте токен власного standalone-застосунку (або сервіс на кшталт vkhost).',
+        'pick_target' => 'Куди публікувати',
+        'target_group' => 'Спільнота',
+        'target_profile' => 'Особиста сторінка',
+        'invalid_token' => 'VK відхилив цей токен.',
+        'invalid_target' => 'Ця стіна недоступна для вказаного токена.',
+        'connection_error' => 'Помилка підключення до VK. Спробуйте ще раз.',
+        'submit' => 'Підключити VK',
         'submitting' => 'Підключення...',
     ],
 

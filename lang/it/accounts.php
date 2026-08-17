@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Collega il tuo account Mastodon',
         'telegram' => 'Collega un canale o gruppo Telegram',
         'discord' => 'Collega un server Discord',
+        'vk' => 'Collega una community o un profilo VK',
     ],
 
     'disconnect_modal' => [
@@ -49,6 +50,22 @@ return [
         'app_password_hint' => 'Usa una <strong>Password per app</strong> per maggiore sicurezza. Creane una su <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'Collega Bluesky',
         'submitting' => 'Collegamento in corso...',
+    ],
+
+    'vk' => [
+        'title' => 'Collega VK',
+        'description' => 'Pubblica in una community o sulla tua bacheca',
+        'access_token' => 'Token di accesso',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Incolla un <strong>token di accesso utente</strong> VK con i permessi <em>wall, photos, groups, video, offline</em>. VK non concede più il permesso wall alle nuove app OAuth; usa un token di una tua app standalone (o un servizio come vkhost).',
+        'pick_target' => 'Dove pubblicare',
+        'target_group' => 'Community',
+        'target_profile' => 'Profilo personale',
+        'invalid_token' => 'VK ha rifiutato questo token.',
+        'invalid_target' => 'Questa bacheca non è gestibile con il token fornito.',
+        'connection_error' => 'Errore di connessione a VK. Riprova.',
+        'submit' => 'Collega VK',
+        'submitting' => 'Connessione...',
     ],
 
     'mastodon' => [

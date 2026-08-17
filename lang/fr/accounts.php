@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Connectez votre compte Mastodon',
         'telegram' => 'Connectez un canal ou un groupe Telegram',
         'discord' => 'Connectez un serveur Discord',
+        'vk' => 'Connectez une communauté ou un profil VK',
     ],
 
     'disconnect_modal' => [
@@ -48,6 +49,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => 'Utilisez un <strong>mot de passe d\'application</strong> pour plus de sécurité. Créez-en un sur <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'Connecter Bluesky',
+        'submitting' => 'Connexion...',
+    ],
+
+    'vk' => [
+        'title' => 'Connecter VK',
+        'description' => 'Publier dans une communauté ou sur votre mur',
+        'access_token' => 'Jeton d\'accès',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Collez un <strong>jeton d\'accès utilisateur</strong> VK avec les autorisations <em>wall, photos, groups, video, offline</em>. VK n\'accorde plus l\'autorisation wall aux nouvelles applications OAuth ; utilisez un jeton d\'une application standalone à vous (ou un service comme vkhost).',
+        'pick_target' => 'Où publier',
+        'target_group' => 'Communauté',
+        'target_profile' => 'Profil personnel',
+        'invalid_token' => 'VK a rejeté ce jeton.',
+        'invalid_target' => 'Ce mur ne peut pas être géré avec le jeton fourni.',
+        'connection_error' => 'Erreur de connexion à VK. Veuillez réessayer.',
+        'submit' => 'Connecter VK',
         'submitting' => 'Connexion...',
     ],
 

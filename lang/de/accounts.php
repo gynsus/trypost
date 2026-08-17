@@ -32,6 +32,7 @@ return [
         'mastodon' => 'Verbinde dein Mastodon-Konto',
         'telegram' => 'Verbinde einen Telegram-Kanal oder eine Telegram-Gruppe',
         'discord' => 'Verbinde einen Discord-Server',
+        'vk' => 'Verbinde eine VK-Community oder ein Profil',
     ],
 
     'disconnect_modal' => [
@@ -51,6 +52,22 @@ return [
         'app_password_hint' => 'Verwende aus Sicherheitsgründen ein <strong>App-Passwort</strong>. Erstelle eines unter <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'Bluesky verbinden',
         'submitting' => 'Verbindung wird hergestellt...',
+    ],
+
+    'vk' => [
+        'title' => 'VK verbinden',
+        'description' => 'In einer Community oder auf deiner Pinnwand veröffentlichen',
+        'access_token' => 'Zugriffstoken',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Füge ein VK-<strong>Benutzer-Zugriffstoken</strong> mit den Berechtigungen <em>wall, photos, groups, video, offline</em> ein. Neuen OAuth-Apps gewährt VK die wall-Berechtigung nicht mehr; verwende daher ein Token einer eigenen Standalone-App (oder einen Dienst wie vkhost).',
+        'pick_target' => 'Wo veröffentlichen?',
+        'target_group' => 'Community',
+        'target_profile' => 'Persönliches Profil',
+        'invalid_token' => 'VK hat dieses Token abgelehnt.',
+        'invalid_target' => 'Diese Pinnwand ist mit dem angegebenen Token nicht verwaltbar.',
+        'connection_error' => 'Fehler beim Verbinden mit VK. Bitte erneut versuchen.',
+        'submit' => 'VK verbinden',
+        'submitting' => 'Verbinden...',
     ],
 
     'mastodon' => [

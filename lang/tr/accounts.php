@@ -32,6 +32,7 @@ return [
         'mastodon' => 'Mastodon hesabınızı bağlayın',
         'telegram' => 'Bir Telegram kanalı veya grubu bağlayın',
         'discord' => 'Bir Discord sunucusu bağlayın',
+        'vk' => 'Bir VK topluluğu veya profili bağlayın',
     ],
 
     'disconnect_modal' => [
@@ -50,6 +51,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => 'Güvenlik için bir <strong>Uygulama Parolası</strong> kullanın. <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a> adresinden oluşturun.',
         'submit' => 'Bluesky\'i Bağla',
+        'submitting' => 'Bağlanıyor...',
+    ],
+
+    'vk' => [
+        'title' => 'VK\'yı bağla',
+        'description' => 'Bir topluluğa veya kendi duvarınıza gönderi yayınlayın',
+        'access_token' => 'Erişim belirteci',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => '<em>wall, photos, groups, video, offline</em> kapsamlarına sahip bir VK <strong>kullanıcı erişim belirteci</strong> yapıştırın. VK, yeni OAuth uygulamalarına artık wall kapsamı vermiyor; kendi standalone uygulamanızın belirtecini (veya vkhost gibi bir hizmeti) kullanın.',
+        'pick_target' => 'Nerede yayınlansın',
+        'target_group' => 'Topluluk',
+        'target_profile' => 'Kişisel profil',
+        'invalid_token' => 'VK bu belirteci reddetti.',
+        'invalid_target' => 'Bu duvar, verilen belirteçle yönetilemiyor.',
+        'connection_error' => 'VK\'ya bağlanırken hata oluştu. Lütfen tekrar deneyin.',
+        'submit' => 'VK\'yı bağla',
         'submitting' => 'Bağlanıyor...',
     ],
 

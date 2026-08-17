@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Connect your Mastodon account',
         'telegram' => 'Connect a Telegram channel or group',
         'discord' => 'Connect a Discord server',
+        'vk' => 'Connect a VK community or profile',
     ],
 
     'disconnect_modal' => [
@@ -48,6 +49,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => 'Use an <strong>App Password</strong> for security. Create one at <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'Connect Bluesky',
+        'submitting' => 'Connecting...',
+    ],
+
+    'vk' => [
+        'title' => 'Connect VK',
+        'description' => 'Publish to a community or your profile wall',
+        'access_token' => 'Access token',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Paste a VK <strong>user access token</strong> with the <em>wall, photos, groups, video, offline</em> scopes. VK no longer grants the wall scope to new OAuth apps, so use a token from a standalone app you own (or a service like vkhost).',
+        'pick_target' => 'Choose where to publish',
+        'target_group' => 'Community',
+        'target_profile' => 'Personal profile',
+        'invalid_token' => 'VK rejected this token.',
+        'invalid_target' => 'This wall cannot be managed with the provided token.',
+        'connection_error' => 'Error connecting to VK. Please try again.',
+        'submit' => 'Connect VK',
         'submitting' => 'Connecting...',
     ],
 

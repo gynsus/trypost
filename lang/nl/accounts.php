@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Koppel je Mastodon-account',
         'telegram' => 'Koppel een Telegram-kanaal of -groep',
         'discord' => 'Koppel een Discord-server',
+        'vk' => 'Verbind een VK-community of -profiel',
     ],
 
     'disconnect_modal' => [
@@ -49,6 +50,22 @@ return [
         'app_password_hint' => 'Gebruik voor de veiligheid een <strong>App-wachtwoord</strong>. Maak er een aan op <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'Bluesky koppelen',
         'submitting' => 'Koppelen...',
+    ],
+
+    'vk' => [
+        'title' => 'VK verbinden',
+        'description' => 'Publiceer in een community of op je eigen prikbord',
+        'access_token' => 'Toegangstoken',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Plak een VK-<strong>gebruikerstoegangstoken</strong> met de rechten <em>wall, photos, groups, video, offline</em>. VK geeft nieuwe OAuth-apps het wall-recht niet meer; gebruik een token van een eigen standalone-app (of een dienst zoals vkhost).',
+        'pick_target' => 'Waar publiceren',
+        'target_group' => 'Community',
+        'target_profile' => 'Persoonlijk profiel',
+        'invalid_token' => 'VK heeft dit token geweigerd.',
+        'invalid_target' => 'Dit prikbord is niet beheerbaar met het opgegeven token.',
+        'connection_error' => 'Fout bij verbinden met VK. Probeer het opnieuw.',
+        'submit' => 'VK verbinden',
+        'submitting' => 'Verbinden...',
     ],
 
     'mastodon' => [

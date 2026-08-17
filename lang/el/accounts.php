@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Συνδέστε τον λογαριασμό σας Mastodon',
         'telegram' => 'Συνδέστε ένα κανάλι ή ομάδα Telegram',
         'discord' => 'Συνδέστε έναν διακομιστή Discord',
+        'vk' => 'Συνδέστε μια κοινότητα ή ένα προφίλ VK',
     ],
 
     'disconnect_modal' => [
@@ -48,6 +49,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => 'Χρησιμοποιήστε ένα <strong>App Password</strong> για ασφάλεια. Δημιουργήστε ένα στο <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'Σύνδεση Bluesky',
+        'submitting' => 'Σύνδεση...',
+    ],
+
+    'vk' => [
+        'title' => 'Σύνδεση VK',
+        'description' => 'Δημοσιεύστε σε κοινότητα ή στον τοίχο σας',
+        'access_token' => 'Διακριτικό πρόσβασης',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Επικολλήστε ένα <strong>διακριτικό πρόσβασης χρήστη</strong> VK με τα δικαιώματα <em>wall, photos, groups, video, offline</em>. Το VK δεν παραχωρεί πλέον το δικαίωμα wall σε νέες εφαρμογές OAuth· χρησιμοποιήστε διακριτικό από δική σας standalone εφαρμογή (ή υπηρεσία όπως το vkhost).',
+        'pick_target' => 'Πού να δημοσιευτεί',
+        'target_group' => 'Κοινότητα',
+        'target_profile' => 'Προσωπικό προφίλ',
+        'invalid_token' => 'Το VK απέρριψε αυτό το διακριτικό.',
+        'invalid_target' => 'Αυτός ο τοίχος δεν μπορεί να διαχειριστεί με το παρεχόμενο διακριτικό.',
+        'connection_error' => 'Σφάλμα σύνδεσης με το VK. Δοκιμάστε ξανά.',
+        'submit' => 'Σύνδεση VK',
         'submitting' => 'Σύνδεση...',
     ],
 

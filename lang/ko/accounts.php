@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Mastodon 계정을 연결하세요',
         'telegram' => 'Telegram 채널 또는 그룹을 연결하세요',
         'discord' => 'Discord 서버를 연결하세요',
+        'vk' => 'VK 커뮤니티 또는 프로필 연결',
     ],
 
     'disconnect_modal' => [
@@ -48,6 +49,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => '보안을 위해 <strong>앱 비밀번호</strong>를 사용하세요. <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>에서 생성할 수 있습니다.',
         'submit' => 'Bluesky 연결',
+        'submitting' => '연결 중...',
+    ],
+
+    'vk' => [
+        'title' => 'VK 연결',
+        'description' => '커뮤니티 또는 내 담벼락에 게시합니다',
+        'access_token' => '액세스 토큰',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => '<em>wall, photos, groups, video, offline</em> 범위가 있는 VK <strong>사용자 액세스 토큰</strong>을 붙여넣으세요. VK는 새 OAuth 앱에 더 이상 wall 범위를 부여하지 않으므로, 본인 소유 standalone 앱의 토큰(또는 vkhost 같은 서비스)을 사용하세요.',
+        'pick_target' => '게시 위치 선택',
+        'target_group' => '커뮤니티',
+        'target_profile' => '개인 프로필',
+        'invalid_token' => 'VK가 이 토큰을 거부했습니다.',
+        'invalid_target' => '제공된 토큰으로는 이 담벼락을 관리할 수 없습니다.',
+        'connection_error' => 'VK 연결 중 오류가 발생했습니다. 다시 시도해 주세요.',
+        'submit' => 'VK 연결',
         'submitting' => '연결 중...',
     ],
 

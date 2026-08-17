@@ -10,6 +10,7 @@ use App\Exceptions\Social\BlueskyPublishException;
 use App\Exceptions\Social\DiscordPublishException;
 use App\Exceptions\Social\LinkedInPublishException;
 use App\Exceptions\Social\MastodonPublishException;
+use App\Exceptions\Social\VkPublishException;
 use App\Exceptions\Social\PinterestPublishException;
 use App\Exceptions\Social\TelegramPublishException;
 use App\Exceptions\Social\TikTokPublishException;
@@ -184,6 +185,7 @@ class ConnectionVerifier
             Platform::Mastodon => $this->verifyMastodon($account),
             Platform::Telegram => $this->verifyTelegram($account),
             Platform::Discord => $this->verifyDiscord($account),
+            Platform::Vk => $this->verifyVk($account),
         };
     }
 
@@ -719,6 +721,27 @@ class ConnectionVerifier
         }
 
         if ($response->successful()) {
+            return true;
+        }
+
+        throw new PlatformUnavailableException(
+            "{$account->platform->label()} verify failed ({$response->status()}).",
+            $response->status(),
+        );
+    }
+
+    private function verifyVk(SocialAccount $account): bool
+    {
+        $response = Http::asForm()->post(
+            \App\Services\Social\Vk\VkApi::endpoint('users.get'),
+            \App\Services\Social\Vk\VkApi::baseParams($account->access_token),
+        );
+
+        if (VkPublishException::isConfirmedDeadToken($response)) {
+            throw new TokenExpiredException('VK access token is invalid or revoked');
+        }
+
+        if ($response->successful() && $response->json('error') === null) {
             return true;
         }
 

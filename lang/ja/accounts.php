@@ -30,6 +30,7 @@ return [
         'mastodon' => 'Mastodon アカウントを接続',
         'telegram' => 'Telegram チャンネルまたはグループを接続',
         'discord' => 'Discord サーバーを接続',
+        'vk' => 'VKのコミュニティまたはプロフィールを連携',
     ],
 
     'disconnect_modal' => [
@@ -48,6 +49,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => 'セキュリティのため<strong>アプリパスワード</strong>を使用してください。<a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a> で作成できます。',
         'submit' => 'Bluesky を接続',
+        'submitting' => '接続中...',
+    ],
+
+    'vk' => [
+        'title' => 'VKを連携',
+        'description' => 'コミュニティまたは自分のウォールに投稿します',
+        'access_token' => 'アクセストークン',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => '<em>wall, photos, groups, video, offline</em> スコープ付きのVK<strong>ユーザーアクセストークン</strong>を貼り付けてください。VKは新しいOAuthアプリにwallスコープを付与しなくなったため、自分のスタンドアロンアプリのトークン(またはvkhostのようなサービス)を使用してください。',
+        'pick_target' => '投稿先を選択',
+        'target_group' => 'コミュニティ',
+        'target_profile' => '個人プロフィール',
+        'invalid_token' => 'VKがこのトークンを拒否しました。',
+        'invalid_target' => 'このウォールは指定されたトークンでは管理できません。',
+        'connection_error' => 'VKへの接続エラーです。もう一度お試しください。',
+        'submit' => 'VKを連携',
         'submitting' => '接続中...',
     ],
 

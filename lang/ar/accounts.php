@@ -30,6 +30,7 @@ return [
         'mastodon' => 'اربط حسابك على Mastodon',
         'telegram' => 'اربط قناة أو مجموعة على Telegram',
         'discord' => 'اربط خادم Discord',
+        'vk' => 'اربط مجتمع VK أو ملفًا شخصيًا',
     ],
 
     'disconnect_modal' => [
@@ -48,6 +49,22 @@ return [
         'app_password_placeholder' => 'xxxx-xxxx-xxxx-xxxx',
         'app_password_hint' => 'استخدم <strong>كلمة مرور التطبيق</strong> لمزيد من الأمان. أنشئ واحدة من <a href="https://bsky.app/settings/app-passwords" target="_blank" class="underline">bsky.app/settings</a>.',
         'submit' => 'ربط Bluesky',
+        'submitting' => 'جارٍ الاتصال...',
+    ],
+
+    'vk' => [
+        'title' => 'ربط VK',
+        'description' => 'انشر في مجتمع أو على حائطك الشخصي',
+        'access_token' => 'رمز الوصول',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'الصق <strong>رمز وصول مستخدم</strong> من VK بصلاحيات <em>wall, photos, groups, video, offline</em>. لم يعد VK يمنح صلاحية wall لتطبيقات OAuth الجديدة، فاستخدم رمزًا من تطبيق standalone خاص بك (أو خدمة مثل vkhost).',
+        'pick_target' => 'اختر وجهة النشر',
+        'target_group' => 'مجتمع',
+        'target_profile' => 'ملف شخصي',
+        'invalid_token' => 'رفض VK هذا الرمز.',
+        'invalid_target' => 'لا يمكن إدارة هذا الحائط بالرمز المقدّم.',
+        'connection_error' => 'خطأ في الاتصال بـ VK. حاول مرة أخرى.',
+        'submit' => 'ربط VK',
         'submitting' => 'جارٍ الاتصال...',
     ],
 
