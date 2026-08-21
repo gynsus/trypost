@@ -1,3 +1,5 @@
+import { usePage } from '@inertiajs/vue3';
+
 import dayjs from '@/dayjs';
 import { activeLocale } from '@/language';
 
@@ -13,6 +15,13 @@ const localized = (value?: dayjs.ConfigType) => dayjs(value).locale(activeLocale
  * Tenta pegar do Inertia page props primeiro, senão usa o timezone do browser
  */
 function getUserTimezone(): string {
+    try {
+        const tz = (usePage().props as any)?.auth?.currentWorkspace?.timezone;
+        if (tz) return tz as string;
+    } catch {
+        // Вне контекста Inertia (например, в тестах) — падаем на браузерную.
+    }
+
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
