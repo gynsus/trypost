@@ -580,3 +580,21 @@ test('mastodon publisher keeps links intact', function () {
     Http::assertSent(fn ($request) => str_contains($request->url(), '/api/v1/statuses')
         && $request['status'] === 'New post: https://acme.com/blog');
 });
+
+test('mastodon publisher uses the per-platform content override', function () {
+    $this->postPlatform->update(['meta' => ['content' => 'Short Mastodon-only version']]);
+    $this->postPlatform->refresh();
+
+    Http::fake([
+        'https://mastodon.social/api/v1/statuses' => Http::response([
+            'id' => '42', 'url' => 'https://mastodon.social/@testuser/42',
+        ], 200),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(function ($request) {
+        return str_contains($request->url(), '/api/v1/statuses')
+            && $request['status'] === 'Short Mastodon-only version';
+    });
+});
