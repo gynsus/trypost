@@ -354,7 +354,26 @@ test('update workspace settings persists the workspace timezone', function () {
     expect($this->workspace->fresh()->timezone)->toBeNull();
 });
 
+test('update workspace settings persists the datetime format preset', function () {
+    $this->actingAs($this->user)
+        ->put(route('app.workspace.settings.update'), [
+            'name' => $this->workspace->name,
+            'datetime_format' => 'dots_24',
+        ]);
+
+    expect($this->workspace->fresh()->datetime_format)->toBe('dots_24');
+
+    $response = $this->actingAs($this->user)
+        ->put(route('app.workspace.settings.update'), [
+            'name' => $this->workspace->name,
+            'datetime_format' => 'not-a-preset',
+        ]);
+
+    $response->assertSessionHasErrors('datetime_format');
+});
+
 test('update workspace settings rejects an invalid timezone', function () {
+
     $response = $this->actingAs($this->user)
         ->put(route('app.workspace.settings.update'), [
             'name' => $this->workspace->name,

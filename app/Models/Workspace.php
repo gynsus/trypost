@@ -34,6 +34,7 @@ class Workspace extends Model
         'image_style',
         'content_language',
         'timezone',
+        'datetime_format',
     ];
 
     protected function casts(): array
