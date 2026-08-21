@@ -18,6 +18,7 @@ interface Workspace {
     name: string;
     has_logo: boolean;
     logo_url: string | null;
+    timezone?: string | null;
 }
 
 defineProps<{
@@ -27,6 +28,16 @@ defineProps<{
 }>();
 
 const { canManageBilling } = useWorkspaceRole();
+
+const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+const timezones: string[] = (() => {
+    try {
+        return (Intl as any).supportedValuesOf('timeZone') as string[];
+    } catch {
+        return [browserTimezone];
+    }
+})();
 </script>
 
 <template>
@@ -68,6 +79,20 @@ const { canManageBilling } = useWorkspaceRole();
                         :placeholder="$t('settings.workspace.name_placeholder')"
                     />
                     <InputError :message="errors.name" />
+                </div>
+
+                <div class="grid gap-2">
+                    <Label for="timezone">{{ $t('settings.workspace.timezone') }}</Label>
+                    <select
+                        id="timezone"
+                        name="timezone"
+                        class="border-input h-9 w-full rounded-md border-2 bg-transparent px-3 py-1 text-sm shadow-2xs"
+                    >
+                        <option value="" :selected="!workspace.timezone">{{ $t('settings.workspace.timezone_auto', { tz: browserTimezone }) }}</option>
+                        <option v-for="tz in timezones" :key="tz" :value="tz" :selected="workspace.timezone === tz">{{ tz }}</option>
+                    </select>
+                    <p class="text-xs text-foreground/60">{{ $t('settings.workspace.timezone_description') }}</p>
+                    <InputError :message="errors.timezone" />
                 </div>
 
                 <Button :disabled="processing">{{ $t('settings.workspace.save') }}</Button>

@@ -33,6 +33,7 @@ class Workspace extends Model
         'brand_font',
         'image_style',
         'content_language',
+        'timezone',
     ];
 
     protected function casts(): array
