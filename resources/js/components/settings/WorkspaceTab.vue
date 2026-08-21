@@ -19,6 +19,7 @@ interface Workspace {
     has_logo: boolean;
     logo_url: string | null;
     timezone?: string | null;
+    datetime_format?: string | null;
 }
 
 defineProps<{
@@ -38,6 +39,13 @@ const timezones: string[] = (() => {
         return [browserTimezone];
     }
 })();
+
+const formatPresets = [
+    { value: 'dmy_24', example: '20 Aug 2026, 18:30' },
+    { value: 'dmy_12', example: '20 Aug 2026, 6:30 PM' },
+    { value: 'dots_24', example: '20.08.2026 18:30' },
+    { value: 'slash_12', example: '08/20/2026 6:30 PM' },
+];
 </script>
 
 <template>
@@ -93,6 +101,20 @@ const timezones: string[] = (() => {
                     </select>
                     <p class="text-xs text-foreground/60">{{ $t('settings.workspace.timezone_description') }}</p>
                     <InputError :message="errors.timezone" />
+                </div>
+
+                <div class="grid gap-2">
+                    <Label for="datetime_format">{{ $t('settings.workspace.datetime_format') }}</Label>
+                    <select
+                        id="datetime_format"
+                        name="datetime_format"
+                        class="border-input h-9 w-full rounded-md border-2 bg-transparent px-3 py-1 text-sm shadow-2xs"
+                    >
+                        <option value="" :selected="!workspace.datetime_format">{{ $t('settings.workspace.datetime_format_auto') }}</option>
+                        <option v-for="preset in formatPresets" :key="preset.value" :value="preset.value" :selected="workspace.datetime_format === preset.value">{{ preset.example }}</option>
+                    </select>
+                    <p class="text-xs text-foreground/60">{{ $t('settings.workspace.datetime_format_description') }}</p>
+                    <InputError :message="errors.datetime_format" />
                 </div>
 
                 <Button :disabled="processing">{{ $t('settings.workspace.save') }}</Button>

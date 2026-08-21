@@ -36,6 +36,7 @@ class UpdateWorkspaceRequest extends FormRequest
             'content_language' => ['sometimes', 'string', Rule::in(ContentLanguage::values())],
             'logo_url' => ['nullable', 'url', 'max:1024'],
             'timezone' => ['sometimes', 'nullable', 'string', 'timezone:all'],
+            'datetime_format' => ['sometimes', 'nullable', 'string', Rule::in(['dmy_24', 'dmy_12', 'dots_24', 'slash_12'])],
         ];
     }
 }
