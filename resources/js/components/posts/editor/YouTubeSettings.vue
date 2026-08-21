@@ -3,6 +3,7 @@ import { IconChevronDown, IconChevronUp } from '@tabler/icons-vue';
 import { computed, ref } from 'vue';
 
 import { Avatar } from '@/components/ui/avatar';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { getPlatformLogo } from '@/composables/usePlatformLogo';
 
@@ -46,6 +47,52 @@ const description = computed({
 const firstComment = computed({
     get: () => (props.meta?.first_comment as string | undefined) || '',
     set: (value: string) => emit('update:meta', { ...props.meta, first_comment: value || null }),
+});
+
+const TITLE_MAX = 100;
+
+const title = computed({
+    get: () => (props.meta?.title as string | undefined) || '',
+    set: (value: string) => emit('update:meta', { ...props.meta, title: value || null }),
+});
+
+const tags = computed({
+    get: () => ((props.meta?.tags as string[] | undefined) ?? []).join(', '),
+    set: (value: string) => {
+        const parsed = value.split(',').map((t) => t.trim()).filter(Boolean);
+        emit('update:meta', { ...props.meta, tags: parsed.length ? parsed : null });
+    },
+});
+
+const categoryId = computed({
+    get: () => (props.meta?.category_id as string | undefined) || '',
+    set: (value: string) => emit('update:meta', { ...props.meta, category_id: value.trim() || null }),
+});
+
+const defaultLanguage = computed({
+    get: () => (props.meta?.default_language as string | undefined) || '',
+    set: (value: string) => emit('update:meta', { ...props.meta, default_language: value.trim() || null }),
+});
+
+const recording = computed(() => (props.meta?.recording_location as Record<string, any> | undefined) ?? null);
+
+const setRecording = (patch: Record<string, any>) => {
+    const next = { ...(recording.value ?? {}), ...patch };
+    const empty = !String(next.lat ?? '').length && !String(next.lng ?? '').length && !String(next.description ?? '').trim();
+    emit('update:meta', { ...props.meta, recording_location: empty ? null : next });
+};
+
+const recLat = computed({
+    get: () => String(recording.value?.lat ?? ''),
+    set: (value: string) => setRecording({ lat: value === '' ? null : Number(value) }),
+});
+const recLng = computed({
+    get: () => String(recording.value?.lng ?? ''),
+    set: (value: string) => setRecording({ lng: value === '' ? null : Number(value) }),
+});
+const recDescription = computed({
+    get: () => (recording.value?.description as string | undefined) || '',
+    set: (value: string) => setRecording({ description: value || null }),
 });
 </script>
 
@@ -98,6 +145,57 @@ const firstComment = computed({
                     :disabled="disabled || previewOnly"
                 />
                 <p class="text-xs text-foreground/60">{{ $t('posts.form.youtube.description_hint') }}</p>
+            </div>
+
+            <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                    <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.youtube.title') }}</p>
+                    <span class="text-[11px] font-medium" :class="title.length > TITLE_MAX ? 'text-destructive' : 'text-foreground/50'">{{ title.length }}/{{ TITLE_MAX }}</span>
+                </div>
+                <Input
+                    v-model="title"
+                    type="text"
+                    :maxlength="TITLE_MAX"
+                    :placeholder="$t('posts.form.youtube.title_placeholder')"
+                    :disabled="disabled || previewOnly"
+                />
+                <p class="text-xs text-foreground/60">{{ $t('posts.form.youtube.title_hint') }}</p>
+            </div>
+
+            <div class="space-y-2">
+                <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.youtube.tags') }}</p>
+                <Input
+                    v-model="tags"
+                    type="text"
+                    :placeholder="$t('posts.form.youtube.tags_placeholder')"
+                    :disabled="disabled || previewOnly"
+                />
+                <p class="text-xs text-foreground/60">{{ $t('posts.form.youtube.tags_hint') }}</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div class="space-y-2">
+                    <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.youtube.category') }}</p>
+                    <Input v-model="categoryId" type="text" placeholder="22" :disabled="disabled || previewOnly" />
+                </div>
+                <div class="space-y-2">
+                    <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.youtube.language') }}</p>
+                    <Input v-model="defaultLanguage" type="text" placeholder="en" :disabled="disabled || previewOnly" />
+                </div>
+            </div>
+
+            <div class="space-y-2">
+                <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.youtube.location') }}</p>
+                <Input
+                    v-model="recDescription"
+                    type="text"
+                    :placeholder="$t('posts.form.youtube.location_placeholder')"
+                    :disabled="disabled || previewOnly"
+                />
+                <div class="grid grid-cols-2 gap-3">
+                    <Input v-model="recLat" type="text" :placeholder="$t('posts.form.youtube.lat')" :disabled="disabled || previewOnly" />
+                    <Input v-model="recLng" type="text" :placeholder="$t('posts.form.youtube.lng')" :disabled="disabled || previewOnly" />
+                </div>
             </div>
 
             <div class="space-y-2">

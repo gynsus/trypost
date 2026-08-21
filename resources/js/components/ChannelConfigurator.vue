@@ -2,6 +2,7 @@
 import { IconAlertCircle, IconCircleCheck, IconExternalLink } from '@tabler/icons-vue';
 import { computed } from 'vue';
 
+import ChannelCaptionOverride from '@/components/posts/editor/ChannelCaptionOverride.vue';
 import DiscordSettings from '@/components/posts/editor/DiscordSettings.vue';
 import FacebookSettings from '@/components/posts/editor/FacebookSettings.vue';
 import InstagramSettings from '@/components/posts/editor/InstagramSettings.vue';
@@ -167,6 +168,12 @@ const settingsProps = (channel: Channel) => ({
                 :social-account="channel.socialAccount"
                 :platform="channel.platform"
                 :meta="channel.meta"
+                :disabled="disabled"
+                :preview-only="previewOnly"
+                @update:meta="emit('update:meta', channel.id, $event)"
+            />
+            <ChannelCaptionOverride
+                :channel="channel"
                 :disabled="disabled"
                 :preview-only="previewOnly"
                 @update:meta="emit('update:meta', channel.id, $event)"

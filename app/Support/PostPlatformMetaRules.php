@@ -69,6 +69,27 @@ class PostPlatformMetaRules
             // the two.
             'platforms.*.meta.first_comment' => ['sometimes', 'nullable', 'string', 'max:2200'],
 
+            // Any platform — caption override for this platform row only. The
+            // platform's own hard cap is enforced at publish time against the
+            // resolved text (PostPlatform::resolvedContent()).
+            'platforms.*.meta.content' => ['sometimes', 'nullable', 'string', 'max:16000'],
+
+            // Instagram / Facebook — place tag. Meta closed place search to
+            // third parties, so the ID is entered by hand; location_name is
+            // only for display in the editor.
+            'platforms.*.meta.location_id' => ['sometimes', 'nullable', 'string', 'max:64'],
+            'platforms.*.meta.location_name' => ['sometimes', 'nullable', 'string', 'max:200'],
+
+            // YouTube (title reuses the shared 100-char `title` rule below)
+            'platforms.*.meta.tags' => ['sometimes', 'nullable', 'array', 'max:30'],
+            'platforms.*.meta.tags.*' => ['required', 'string', 'max:100'],
+            'platforms.*.meta.category_id' => ['sometimes', 'nullable', 'string', 'max:10'],
+            'platforms.*.meta.default_language' => ['sometimes', 'nullable', 'string', 'max:12'],
+            'platforms.*.meta.recording_location' => ['sometimes', 'nullable', 'array'],
+            'platforms.*.meta.recording_location.lat' => ['required_with:platforms.*.meta.recording_location', 'numeric', 'between:-90,90'],
+            'platforms.*.meta.recording_location.lng' => ['required_with:platforms.*.meta.recording_location', 'numeric', 'between:-180,180'],
+            'platforms.*.meta.recording_location.description' => ['sometimes', 'nullable', 'string', 'max:200'],
+
             // Pinterest
             'platforms.*.meta.board_id' => ['sometimes', 'nullable', 'string'],
             'platforms.*.meta.title' => ['sometimes', 'nullable', 'string', 'max:100'],
