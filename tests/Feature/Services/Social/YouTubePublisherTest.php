@@ -219,3 +219,18 @@ test('youtube publisher builds correct title with shorts tag', function () {
     $title = $method->invoke($publisher, $newlineContent);
     expect($title)->toBe('Title line #Shorts');
 });
+
+test('youtube publisher resolves title from platform meta with content fallback', function () {
+    $publisher = new YouTubePublisher;
+    $reflection = new ReflectionClass($publisher);
+    $method = $reflection->getMethod('resolveTitle');
+    $method->setAccessible(true);
+
+    $this->postPlatform->meta = null;
+    expect($method->invoke($publisher, $this->postPlatform, 'My awesome short video'))
+        ->toBe('My awesome short video #Shorts');
+
+    $this->postPlatform->meta = ['title' => 'Exact custom title'];
+    expect($method->invoke($publisher, $this->postPlatform, 'My awesome short video'))
+        ->toBe('Exact custom title');
+});
