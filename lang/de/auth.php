@@ -139,4 +139,9 @@ return [
         'expired_action' => 'Zur Startseite',
     ],
 
+    'footer' => [
+        'terms' => 'Nutzungsbedingungen',
+        'privacy' => 'Datenschutzerklärung',
+    ],
+
 ];

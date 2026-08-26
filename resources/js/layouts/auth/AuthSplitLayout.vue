@@ -7,8 +7,11 @@ import {
     IconUsers,
     IconVideo,
 } from '@tabler/icons-vue';
+import { usePage } from '@inertiajs/vue3';
 import { trans } from 'laravel-vue-i18n';
 import { onBeforeUnmount, onMounted, ref, computed } from 'vue';
+
+const legal = computed(() => (usePage().props.legal ?? {}) as { terms?: string; privacy?: string });
 
 defineProps<{
     title?: string;
@@ -109,6 +112,14 @@ const platforms = [
                     </div>
                 </div>
             </div>
+
+            <!-- Platform app reviews (TikTok explicitly) require Terms and
+                 Privacy links visible to a logged-out visitor. -->
+            <footer class="flex items-center justify-center gap-4 text-xs text-muted-foreground">
+                <a :href="legal.terms" target="_blank" class="underline underline-offset-2 hover:text-foreground">{{ $t('auth.footer.terms') }}</a>
+                <span aria-hidden="true">·</span>
+                <a :href="legal.privacy" target="_blank" class="underline underline-offset-2 hover:text-foreground">{{ $t('auth.footer.privacy') }}</a>
+            </footer>
         </div>
 
         <div

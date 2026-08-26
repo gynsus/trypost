@@ -137,4 +137,9 @@ return [
         'expired_action' => 'Retour à l’accueil',
     ],
 
+    'footer' => [
+        'terms' => 'Conditions d’utilisation',
+        'privacy' => 'Politique de confidentialité',
+    ],
+
 ];

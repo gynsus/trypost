@@ -137,4 +137,9 @@ return [
         'expired_action' => '返回首页',
     ],
 
+    'footer' => [
+        'terms' => '服务条款',
+        'privacy' => '隐私政策',
+    ],
+
 ];

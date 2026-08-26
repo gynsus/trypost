@@ -137,4 +137,9 @@ return [
         'expired_action' => 'Vai alla home',
     ],
 
+    'footer' => [
+        'terms' => 'Termini di servizio',
+        'privacy' => 'Informativa sulla privacy',
+    ],
+
 ];

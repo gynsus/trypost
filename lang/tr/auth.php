@@ -139,4 +139,9 @@ return [
         'expired_action' => 'Ana sayfaya git',
     ],
 
+    'footer' => [
+        'terms' => 'Hizmet şartları',
+        'privacy' => 'Gizlilik politikası',
+    ],
+
 ];

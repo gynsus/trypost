@@ -124,4 +124,10 @@ return [
         'expired_description' => 'El workspace de esta invitación fue eliminado. Pide al propietario de la cuenta una nueva invitación si aún necesitas acceso.',
         'expired_action' => 'Ir al inicio',
     ],
+
+    'footer' => [
+        'terms' => 'Términos del servicio',
+        'privacy' => 'Política de privacidad',
+    ],
+
 ];

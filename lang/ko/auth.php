@@ -137,4 +137,9 @@ return [
         'expired_action' => '홈으로',
     ],
 
+    'footer' => [
+        'terms' => '서비스 약관',
+        'privacy' => '개인정보 처리방침',
+    ],
+
 ];

@@ -137,4 +137,9 @@ return [
         'expired_action' => 'Naar home',
     ],
 
+    'footer' => [
+        'terms' => 'Servicevoorwaarden',
+        'privacy' => 'Privacybeleid',
+    ],
+
 ];

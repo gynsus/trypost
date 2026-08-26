@@ -137,4 +137,9 @@ return [
         'expired_action' => 'Ir para o início',
     ],
 
+    'footer' => [
+        'terms' => 'Termos de serviço',
+        'privacy' => 'Política de privacidade',
+    ],
+
 ];

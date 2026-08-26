@@ -137,4 +137,9 @@ return [
         'expired_action' => 'Przejdź do strony głównej',
     ],
 
+    'footer' => [
+        'terms' => 'Regulamin',
+        'privacy' => 'Polityka prywatności',
+    ],
+
 ];

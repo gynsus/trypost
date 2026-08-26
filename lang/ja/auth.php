@@ -137,4 +137,9 @@ return [
         'expired_action' => 'ホームへ',
     ],
 
+    'footer' => [
+        'terms' => '利用規約',
+        'privacy' => 'プライバシーポリシー',
+    ],
+
 ];
