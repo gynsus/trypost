@@ -185,7 +185,11 @@ class VkController extends SocialController
         $user = $response->json('response.0');
 
         if (! is_array($user)) {
-            throw ValidationException::withMessages(['access_token' => __('accounts.vk.invalid_token')]);
+            // users.get is callable with a community access token too — it
+            // just returns an empty list without user_ids. A successful but
+            // empty response therefore means a community token, not a broken
+            // one (a dead token errors out above with VK's own message).
+            return null;
         }
 
         return $user;

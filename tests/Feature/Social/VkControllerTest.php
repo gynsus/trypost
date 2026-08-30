@@ -135,12 +135,9 @@ test('a token vk rejects surfaces the api error on the token field', function ()
 function fakeVkCommunityToken(string $api): array
 {
     return [
-        "{$api}/users.get*" => Http::response([
-            'error' => [
-                'error_code' => 27,
-                'error_msg' => 'Group authorization failed: method is unavailable with group auth.',
-            ],
-        ], 200),
+        // users.get принимает ключ сообщества, но без user_ids отвечает
+        // пустым списком — так и распознаётся ключ сообщества.
+        "{$api}/users.get*" => Http::response(['response' => []], 200),
         "{$api}/groups.getById*" => Http::response([
             'response' => [
                 'groups' => [
