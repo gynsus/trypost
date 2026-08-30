@@ -22,11 +22,13 @@ interface VkTarget {
 
 const props = defineProps<{
     targets?: VkTarget[];
+    communityToken?: boolean;
 }>();
 
-const form = useForm<{ access_token: string; owner_id: number | null }>({
+const form = useForm<{ access_token: string; owner_id: number | null; community: string }>({
     access_token: '',
     owner_id: null,
+    community: '',
 });
 
 const hasTargets = computed(() => (props.targets ?? []).length > 0);
@@ -84,6 +86,33 @@ const pickTarget = (target: VkTarget) => {
                     {{ form.errors.owner_id }}
                 </p>
             </div>
+
+            <!-- Step 2 (community token): the community the key belongs to -->
+            <form v-else-if="props.communityToken" @submit.prevent="onSubmit" class="space-y-4">
+                <div class="space-y-2">
+                    <Label for="community">{{ $t('accounts.vk.community') }}</Label>
+                    <Input id="community" v-model="form.community"
+                        :placeholder="trans('accounts.vk.community_placeholder')" :class="{ 'border-destructive': form.errors.community }"
+                    />
+                    <p v-if="form.errors.community" class="text-sm text-destructive">
+                        {{ form.errors.community }}
+                    </p>
+                    <p v-if="form.errors.access_token" class="text-sm text-destructive">
+                        {{ form.errors.access_token }}
+                    </p>
+                </div>
+
+                <Alert>
+                    <IconInfoCircle class="h-4 w-4" />
+                    <AlertDescription class="inline">
+                        {{ $t('accounts.vk.community_hint') }}
+                    </AlertDescription>
+                </Alert>
+
+                <Button type="submit" :disabled="form.processing" class="w-full">
+                    {{ form.processing ? $t('accounts.vk.submitting') : $t('accounts.vk.submit') }}
+                </Button>
+            </form>
 
             <!-- Step 1: access token -->
             <form v-else @submit.prevent="onSubmit" class="space-y-4">

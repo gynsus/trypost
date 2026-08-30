@@ -132,15 +132,16 @@ test('a token vk rejects surfaces the api error on the token field', function ()
     $response->assertSessionHasErrors('access_token');
 });
 
-test('a community access token connects its community directly', function () {
-    Http::fake([
-        "{$this->api}/users.get*" => Http::response([
+function fakeVkCommunityToken(string $api): array
+{
+    return [
+        "{$api}/users.get*" => Http::response([
             'error' => [
                 'error_code' => 27,
                 'error_msg' => 'Group authorization failed: method is unavailable with group auth.',
             ],
         ], 200),
-        "{$this->api}/groups.getById*" => Http::response([
+        "{$api}/groups.getById*" => Http::response([
             'response' => [
                 'groups' => [
                     [
@@ -152,7 +153,14 @@ test('a community access token connects its community directly', function () {
                 ],
             ],
         ], 200),
-    ]);
+        "{$api}/groups.getOnlineStatus*" => Http::response([
+            'response' => ['status' => 'none'],
+        ], 200),
+    ];
+}
+
+test('a community access token asks for the community address first', function () {
+    Http::fake(fakeVkCommunityToken($this->api));
 
     $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
         'access_token' => 'vk1.a.community-token',
@@ -160,8 +168,30 @@ test('a community access token connects its community directly', function () {
 
     $response->assertOk();
     $response->assertInertia(fn (AssertableInertia $page) => $page
+        ->component('accounts/VkConnect')
+        ->where('communityToken', true));
+
+    $this->assertDatabaseMissing('social_accounts', [
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Vk->value,
+    ]);
+});
+
+test('a community access token connects its community', function () {
+    Http::fake(fakeVkCommunityToken($this->api));
+
+    $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
+        'access_token' => 'vk1.a.community-token',
+        'community' => 'https://vk.com/njsoft',
+    ]);
+
+    $response->assertOk();
+    $response->assertInertia(fn (AssertableInertia $page) => $page
         ->component('accounts/PopupCallback')
         ->where('success', true));
+
+    Http::assertSent(fn ($request) => str_contains($request->url(), '/groups.getById')
+        && $request['group_ids'] === 'njsoft');
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -179,27 +209,42 @@ test('a community access token connects its community directly', function () {
         ->and(data_get($account->meta, 'is_group'))->toBeTrue();
 });
 
-test('a community token vk rejects surfaces the api error on the token field', function () {
-    Http::fake([
-        "{$this->api}/users.get*" => Http::response([
+test('a community token of a different community is rejected', function () {
+    Http::fake(array_merge(fakeVkCommunityToken($this->api), [
+        "{$this->api}/groups.getOnlineStatus*" => Http::response([
             'error' => [
-                'error_code' => 27,
-                'error_msg' => 'Group authorization failed: method is unavailable with group auth.',
+                'error_code' => 15,
+                'error_msg' => 'Access denied: group access token is not suitable for this group.',
             ],
         ], 200),
-        "{$this->api}/groups.getById*" => Http::response([
-            'error' => [
-                'error_code' => 5,
-                'error_msg' => 'Group authorization failed: invalid access_token.',
-            ],
-        ], 200),
-    ]);
+    ]));
 
     $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
-        'access_token' => 'vk1.a.revoked-community-token',
+        'access_token' => 'vk1.a.other-community-token',
+        'community' => 'njsoft',
     ]);
 
-    $response->assertSessionHasErrors('access_token');
+    $response->assertSessionHasErrors('community');
+
+    $this->assertDatabaseMissing('social_accounts', [
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Vk->value,
+    ]);
+});
+
+test('an unknown community address surfaces a validation error', function () {
+    Http::fake(array_merge(fakeVkCommunityToken($this->api), [
+        "{$this->api}/groups.getById*" => Http::response([
+            'response' => ['groups' => []],
+        ], 200),
+    ]));
+
+    $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
+        'access_token' => 'vk1.a.community-token',
+        'community' => 'no-such-club',
+    ]);
+
+    $response->assertSessionHasErrors('community');
 
     $this->assertDatabaseMissing('social_accounts', [
         'workspace_id' => $this->workspace->id,
