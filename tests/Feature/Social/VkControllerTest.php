@@ -150,8 +150,8 @@ function fakeVkCommunityToken(string $api): array
                 ],
             ],
         ], 200),
-        "{$api}/groups.getOnlineStatus*" => Http::response([
-            'response' => ['status' => 'none'],
+        "{$api}/groups.getCallbackConfirmationCode*" => Http::response([
+            'response' => ['code' => '0f3f31b6'],
         ], 200),
     ];
 }
@@ -208,10 +208,10 @@ test('a community access token connects its community', function () {
 
 test('a community token of a different community is rejected', function () {
     Http::fake(array_merge(fakeVkCommunityToken($this->api), [
-        "{$this->api}/groups.getOnlineStatus*" => Http::response([
+        "{$this->api}/groups.getCallbackConfirmationCode*" => Http::response([
             'error' => [
                 'error_code' => 15,
-                'error_msg' => 'Access denied: group access token is not suitable for this group.',
+                'error_msg' => 'Access denied: no access to this group',
             ],
         ], 200),
     ]));

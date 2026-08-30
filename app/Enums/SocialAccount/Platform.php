@@ -438,6 +438,7 @@ enum Platform: string
                 self::Telegram => 'TELEGRAM_ENABLED',
                 self::Discord => 'DISCORD_ENABLED',
                 self::GoogleBusiness => 'GOOGLE_BUSINESS_ENABLED',
+                self::Vk => 'VK_ENABLED',
             }, true),
         );
     }
