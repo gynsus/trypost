@@ -57,7 +57,7 @@ return [
         'description' => 'Publier dans une communauté ou sur votre mur',
         'access_token' => 'Jeton d\'accès',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'Collez un <strong>jeton d\'accès utilisateur</strong> VK avec les autorisations <em>wall, photos, groups, video, offline</em>. VK n\'accorde plus l\'autorisation wall aux nouvelles applications OAuth ; utilisez un jeton d\'une application standalone à vous (ou un service comme vkhost).',
+        'access_token_hint' => 'Recommandé : un <strong>token d\'accès de communauté</strong> (communauté → Gérer → Utilisation de l\'API → Tokens d\'accès ; accordez photos, mur et gestion de la communauté) — la publication fonctionne avec tout type d\'application. VK n\'autorise pas l\'envoi de vidéos avec un token de communauté. Un <strong>token utilisateur</strong> avec les permissions <em>wall, photos, groups, video, offline</em> fonctionne aussi, mais VK ne laisse publier sur le mur qu\'aux applications standalone.',
         'pick_target' => 'Où publier',
         'target_group' => 'Communauté',
         'target_profile' => 'Profil personnel',

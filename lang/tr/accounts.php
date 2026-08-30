@@ -59,7 +59,7 @@ return [
         'description' => 'Bir topluluğa veya kendi duvarınıza gönderi yayınlayın',
         'access_token' => 'Erişim belirteci',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => '<em>wall, photos, groups, video, offline</em> kapsamlarına sahip bir VK <strong>kullanıcı erişim belirteci</strong> yapıştırın. VK, yeni OAuth uygulamalarına artık wall kapsamı vermiyor; kendi standalone uygulamanızın belirtecini (veya vkhost gibi bir hizmeti) kullanın.',
+        'access_token_hint' => 'Önerilen: <strong>topluluk erişim anahtarı</strong> (topluluk → Yönet → API kullanımı → Erişim anahtarları; fotoğraflar, duvar ve topluluk yönetimi izinlerini verin) — yayınlama her uygulama türüyle çalışır. VK, topluluk anahtarıyla video yüklemeye izin vermez. <em>wall, photos, groups, video, offline</em> izinli bir <strong>kullanıcı anahtarı</strong> da çalışır, ancak VK duvara gönderiyi yalnızca standalone uygulamalara açar.',
         'pick_target' => 'Nerede yayınlansın',
         'target_group' => 'Topluluk',
         'target_profile' => 'Kişisel profil',

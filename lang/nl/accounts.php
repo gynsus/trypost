@@ -57,7 +57,7 @@ return [
         'description' => 'Publiceer in een community of op je eigen prikbord',
         'access_token' => 'Toegangstoken',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'Plak een VK-<strong>gebruikerstoegangstoken</strong> met de rechten <em>wall, photos, groups, video, offline</em>. VK geeft nieuwe OAuth-apps het wall-recht niet meer; gebruik een token van een eigen standalone-app (of een dienst zoals vkhost).',
+        'access_token_hint' => 'Aanbevolen: een <strong>community-toegangstoken</strong> (community → Beheren → API-gebruik → Toegangstokens; geef foto\'s, prikbord en communitybeheer) — publiceren werkt met elk app-type. Video-upload staat VK met community-tokens niet toe. Een <strong>gebruikerstoken</strong> met de rechten <em>wall, photos, groups, video, offline</em> werkt ook, maar VK laat alleen standalone-apps op het prikbord posten.',
         'pick_target' => 'Waar publiceren',
         'target_group' => 'Community',
         'target_profile' => 'Persoonlijk profiel',

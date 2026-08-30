@@ -57,7 +57,7 @@ return [
         'description' => 'انشر في مجتمع أو على حائطك الشخصي',
         'access_token' => 'رمز الوصول',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'الصق <strong>رمز وصول مستخدم</strong> من VK بصلاحيات <em>wall, photos, groups, video, offline</em>. لم يعد VK يمنح صلاحية wall لتطبيقات OAuth الجديدة، فاستخدم رمزًا من تطبيق standalone خاص بك (أو خدمة مثل vkhost).',
+        'access_token_hint' => 'موصى به: <strong>مفتاح وصول المجتمع</strong> (المجتمع ← الإدارة ← استخدام API ← مفاتيح الوصول؛ امنح الصور والحائط وإدارة المجتمع) — يعمل النشر مع أي نوع تطبيق. لا يسمح VK برفع الفيديو بمفاتيح المجتمع. يعمل أيضًا <strong>مفتاح المستخدم</strong> بصلاحيات <em>wall, photos, groups, video, offline</em>، لكن VK يسمح بالنشر على الحائط لتطبيقات standalone فقط.',
         'pick_target' => 'اختر وجهة النشر',
         'target_group' => 'مجتمع',
         'target_profile' => 'ملف شخصي',

@@ -57,7 +57,7 @@ return [
         'description' => 'Publikuj w społeczności lub na własnej tablicy',
         'access_token' => 'Token dostępu',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'Wklej <strong>token dostępu użytkownika</strong> VK z uprawnieniami <em>wall, photos, groups, video, offline</em>. VK nie przyznaje już uprawnienia wall nowym aplikacjom OAuth; użyj tokenu własnej aplikacji standalone (lub serwisu takiego jak vkhost).',
+        'access_token_hint' => 'Zalecane: <strong>klucz dostępu społeczności</strong> (społeczność → Zarządzanie → Praca z API → Klucze dostępu; zaznacz zdjęcia, tablicę i zarządzanie społecznością) — publikacja działa z każdym typem aplikacji. VK nie pozwala przesyłać wideo kluczem społeczności. Zadziała też <strong>token użytkownika</strong> z uprawnieniami <em>wall, photos, groups, video, offline</em>, ale publikować na tablicy VK pozwala tylko aplikacjom standalone.',
         'pick_target' => 'Gdzie publikować',
         'target_group' => 'Społeczność',
         'target_profile' => 'Profil osobisty',

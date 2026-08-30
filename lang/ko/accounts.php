@@ -57,7 +57,7 @@ return [
         'description' => '커뮤니티 또는 내 담벼락에 게시합니다',
         'access_token' => '액세스 토큰',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => '<em>wall, photos, groups, video, offline</em> 범위가 있는 VK <strong>사용자 액세스 토큰</strong>을 붙여넣으세요. VK는 새 OAuth 앱에 더 이상 wall 범위를 부여하지 않으므로, 본인 소유 standalone 앱의 토큰(또는 vkhost 같은 서비스)을 사용하세요.',
+        'access_token_hint' => '권장: <strong>커뮤니티 액세스 토큰</strong>(커뮤니티 → 관리 → API 사용 → 액세스 토큰, 사진·담벼락·커뮤니티 관리 권한 부여) — 앱 유형과 무관하게 게시할 수 있습니다. 커뮤니티 토큰으로는 VK가 동영상 업로드를 허용하지 않습니다. <em>wall, photos, groups, video, offline</em> 권한의 <strong>사용자 토큰</strong>도 동작하지만, 담벼락 게시는 standalone 앱에만 허용됩니다.',
         'pick_target' => '게시 위치 선택',
         'target_group' => '커뮤니티',
         'target_profile' => '개인 프로필',

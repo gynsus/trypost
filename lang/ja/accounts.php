@@ -57,7 +57,7 @@ return [
         'description' => 'コミュニティまたは自分のウォールに投稿します',
         'access_token' => 'アクセストークン',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => '<em>wall, photos, groups, video, offline</em> スコープ付きのVK<strong>ユーザーアクセストークン</strong>を貼り付けてください。VKは新しいOAuthアプリにwallスコープを付与しなくなったため、自分のスタンドアロンアプリのトークン(またはvkhostのようなサービス)を使用してください。',
+        'access_token_hint' => '推奨: <strong>コミュニティアクセストークン</strong>(コミュニティ → 管理 → API の利用 → アクセストークン。写真・ウォール・コミュニティ管理を許可)— アプリ種別を問わず投稿できます。コミュニティトークンでは VK は動画アップロードを許可していません。<em>wall, photos, groups, video, offline</em> スコープの<strong>ユーザートークン</strong>も使えますが、ウォール投稿は standalone アプリのみ許可されます。',
         'pick_target' => '投稿先を選択',
         'target_group' => 'コミュニティ',
         'target_profile' => '個人プロフィール',

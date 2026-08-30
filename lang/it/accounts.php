@@ -57,7 +57,7 @@ return [
         'description' => 'Pubblica in una community o sulla tua bacheca',
         'access_token' => 'Token di accesso',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'Incolla un <strong>token di accesso utente</strong> VK con i permessi <em>wall, photos, groups, video, offline</em>. VK non concede più il permesso wall alle nuove app OAuth; usa un token di una tua app standalone (o un servizio come vkhost).',
+        'access_token_hint' => 'Consigliato: un <strong>token di accesso della community</strong> (community → Gestisci → Utilizzo API → Token di accesso; concedi foto, bacheca e gestione della community) — la pubblicazione funziona con qualsiasi tipo di app. VK non consente il caricamento di video con i token della community. Funziona anche un <strong>token utente</strong> con i permessi <em>wall, photos, groups, video, offline</em>, ma VK consente di pubblicare in bacheca solo alle app standalone.',
         'pick_target' => 'Dove pubblicare',
         'target_group' => 'Community',
         'target_profile' => 'Profilo personale',
