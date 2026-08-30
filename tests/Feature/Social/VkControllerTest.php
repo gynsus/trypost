@@ -131,3 +131,78 @@ test('a token vk rejects surfaces the api error on the token field', function ()
 
     $response->assertSessionHasErrors('access_token');
 });
+
+test('a community access token connects its community directly', function () {
+    Http::fake([
+        "{$this->api}/users.get*" => Http::response([
+            'error' => [
+                'error_code' => 27,
+                'error_msg' => 'Group authorization failed: method is unavailable with group auth.',
+            ],
+        ], 200),
+        "{$this->api}/groups.getById*" => Http::response([
+            'response' => [
+                'groups' => [
+                    [
+                        'id' => 654321,
+                        'name' => 'NJ Soft',
+                        'screen_name' => 'njsoft',
+                        'photo_200' => null,
+                    ],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
+        'access_token' => 'vk1.a.community-token',
+    ]);
+
+    $response->assertOk();
+    $response->assertInertia(fn (AssertableInertia $page) => $page
+        ->component('accounts/PopupCallback')
+        ->where('success', true));
+
+    $this->assertDatabaseHas('social_accounts', [
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Vk->value,
+        'platform_user_id' => '-654321',
+        'username' => 'njsoft',
+        'display_name' => 'NJ Soft',
+        'status' => Status::Connected->value,
+    ]);
+
+    $account = $this->workspace->socialAccounts()->where('platform', Platform::Vk->value)->first();
+
+    expect(data_get($account->meta, 'community_token'))->toBeTrue()
+        ->and(data_get($account->meta, 'owner_id'))->toBe(-654321)
+        ->and(data_get($account->meta, 'is_group'))->toBeTrue();
+});
+
+test('a community token vk rejects surfaces the api error on the token field', function () {
+    Http::fake([
+        "{$this->api}/users.get*" => Http::response([
+            'error' => [
+                'error_code' => 27,
+                'error_msg' => 'Group authorization failed: method is unavailable with group auth.',
+            ],
+        ], 200),
+        "{$this->api}/groups.getById*" => Http::response([
+            'error' => [
+                'error_code' => 5,
+                'error_msg' => 'Group authorization failed: invalid access_token.',
+            ],
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
+        'access_token' => 'vk1.a.revoked-community-token',
+    ]);
+
+    $response->assertSessionHasErrors('access_token');
+
+    $this->assertDatabaseMissing('social_accounts', [
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Vk->value,
+    ]);
+});

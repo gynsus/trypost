@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Enums\SocialAccount\Platform as SocialPlatform;
 use App\Enums\SocialAccount\Status;
+use App\Models\Workspace;
 use App\Services\Social\Vk\VkApi;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -24,6 +25,13 @@ use Inertia\Response as InertiaResponse;
  */
 class VkController extends SocialController
 {
+    /**
+     * VK error 27: "Group authorization failed" — the method is unavailable
+     * with a community access token. Used to tell community tokens apart from
+     * user tokens on the shared token field.
+     */
+    private const int VK_ERROR_GROUP_AUTH = 27;
+
     protected SocialPlatform $platform = SocialPlatform::Vk;
 
     public function connect(Request $request): InertiaResponse
@@ -53,12 +61,13 @@ class VkController extends SocialController
         $this->authorize('manageAccounts', $workspace);
 
         try {
-            $user = $this->callVk($request->access_token, 'users.get', [
-                'fields' => 'screen_name,photo_200',
-            ])[0] ?? null;
+            $user = $this->fetchTokenUser($request->access_token);
 
-            if (! is_array($user)) {
-                throw ValidationException::withMessages(['access_token' => __('accounts.vk.invalid_token')]);
+            if ($user === null) {
+                // Community access token: it maps to exactly one community and
+                // wall.post with it is allowed regardless of the app type that
+                // issued it — connect that community directly, no second step.
+                return $this->storeCommunityAccount($request, $workspace);
             }
 
             $targets = $this->buildTargets($request->access_token, $user);
@@ -113,6 +122,93 @@ class VkController extends SocialController
 
             throw ValidationException::withMessages(['access_token' => __('accounts.vk.connection_error')]);
         }
+    }
+
+    /**
+     * The user behind a user access token, or null when the token is a
+     * community access token (users.get answers with error 27 for those).
+     * Any other VK error surfaces as a validation error on the token field.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function fetchTokenUser(string $accessToken): ?array
+    {
+        $response = Http::asForm()->post(VkApi::endpoint('users.get'), [
+            'fields' => 'screen_name,photo_200',
+        ] + VkApi::baseParams($accessToken));
+
+        if ((int) $response->json('error.error_code') === self::VK_ERROR_GROUP_AUTH) {
+            return null;
+        }
+
+        $error = $response->json('error');
+
+        if ($response->failed() || $error !== null) {
+            Log::error('VK connect API call failed', [
+                'method' => 'users.get',
+                'status' => $response->status(),
+                'error_code' => data_get($error, 'error_code'),
+            ]);
+
+            throw ValidationException::withMessages([
+                'access_token' => data_get($error, 'error_msg') ?: __('accounts.vk.connection_error'),
+            ]);
+        }
+
+        $user = $response->json('response.0');
+
+        if (! is_array($user)) {
+            throw ValidationException::withMessages(['access_token' => __('accounts.vk.invalid_token')]);
+        }
+
+        return $user;
+    }
+
+    /**
+     * Connect the community a community access token belongs to. Called with
+     * such a token and no group_id, groups.getById returns that community.
+     */
+    private function storeCommunityAccount(Request $request, Workspace $workspace): InertiaResponse
+    {
+        $groups = $this->callVk($request->access_token, 'groups.getById', [
+            'fields' => 'screen_name,photo_200',
+        ]);
+
+        // v5.199 отдаёт response.groups[], более старые версии — response[].
+        $group = data_get($groups, 'groups.0') ?? data_get($groups, '0');
+
+        if (! is_array($group)) {
+            throw ValidationException::withMessages(['access_token' => __('accounts.vk.invalid_token')]);
+        }
+
+        $ownerId = -(int) data_get($group, 'id');
+        $photo = data_get($group, 'photo_200');
+
+        $workspace->socialAccounts()->updateOrCreate(
+            [
+                'platform' => $this->platform->value,
+                'platform_user_id' => (string) $ownerId,
+            ],
+            [
+                'username' => data_get($group, 'screen_name'),
+                'display_name' => (string) data_get($group, 'name'),
+                'avatar_url' => $photo ? uploadFromUrl($photo) : null,
+                'access_token' => $request->access_token,
+                'refresh_token' => null,
+                // Community access tokens never expire; there is no refresh flow.
+                'token_expires_at' => null,
+                'status' => Status::Connected,
+                'error_message' => null,
+                'disconnected_at' => null,
+                'meta' => [
+                    'owner_id' => $ownerId,
+                    'is_group' => true,
+                    'community_token' => true,
+                ],
+            ],
+        );
+
+        return $this->popupCallback(true, __('accounts.popup_callback.connected'), $this->platform->value);
     }
 
     /**

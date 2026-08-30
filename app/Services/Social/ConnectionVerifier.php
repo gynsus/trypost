@@ -11,10 +11,10 @@ use App\Exceptions\Social\DiscordPublishException;
 use App\Exceptions\Social\GoogleBusinessPublishException;
 use App\Exceptions\Social\LinkedInPublishException;
 use App\Exceptions\Social\MastodonPublishException;
-use App\Exceptions\Social\VkPublishException;
 use App\Exceptions\Social\PinterestPublishException;
 use App\Exceptions\Social\TelegramPublishException;
 use App\Exceptions\Social\TikTokPublishException;
+use App\Exceptions\Social\VkPublishException;
 use App\Exceptions\Social\XPublishException;
 use App\Exceptions\Social\YouTubePublishException;
 use App\Exceptions\TokenExpiredException;
@@ -23,6 +23,7 @@ use App\Services\Social\Discord\DiscordClient;
 use App\Services\Social\Meta\GraphError;
 use App\Services\Social\Telegram\TelegramApi;
 use App\Support\GoogleBusinessResourceName;
+use App\Services\Social\Vk\VkApi;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -806,9 +807,13 @@ class ConnectionVerifier
 
     private function verifyVk(SocialAccount $account): bool
     {
+        // users.get is unavailable with a community access token (error 27);
+        // groups.getById without a group_id returns that token's own community.
+        $method = data_get($account->meta, 'community_token') ? 'groups.getById' : 'users.get';
+
         $response = Http::asForm()->post(
-            \App\Services\Social\Vk\VkApi::endpoint('users.get'),
-            \App\Services\Social\Vk\VkApi::baseParams($account->access_token),
+            VkApi::endpoint($method),
+            VkApi::baseParams($account->access_token),
         );
 
         if (VkPublishException::isConfirmedDeadToken($response)) {
