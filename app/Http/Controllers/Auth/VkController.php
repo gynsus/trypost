@@ -54,6 +54,7 @@ class VkController extends SocialController
         $request->validate([
             'access_token' => 'required|string|min:10',
             'owner_id' => 'nullable|integer',
+            'community' => 'nullable|string|max:255',
         ]);
 
         $workspace = $request->user()->currentWorkspace;
@@ -64,9 +65,17 @@ class VkController extends SocialController
             $user = $this->fetchTokenUser($request->access_token);
 
             if ($user === null) {
-                // Community access token: it maps to exactly one community and
-                // wall.post with it is allowed regardless of the app type that
-                // issued it — connect that community directly, no second step.
+                // Community access token: wall.post with it is allowed
+                // regardless of the app type that issued it, but VK has no API
+                // to tell which community a token belongs to — the form asks
+                // for the community address and the token is checked against it.
+                if (! $request->filled('community')) {
+                    return Inertia::render('accounts/VkConnect', [
+                        'errors' => [],
+                        'communityToken' => true,
+                    ]);
+                }
+
                 return $this->storeCommunityAccount($request, $workspace);
             }
 
@@ -125,6 +134,24 @@ class VkController extends SocialController
     }
 
     /**
+     * A community as the user typed it — a full URL, a `club123` / `public123`
+     * address, a bare numeric id, or a screen name — normalized to what
+     * groups.getById accepts in `group_ids`.
+     */
+    private function normalizeCommunity(string $input): string
+    {
+        $value = trim($input);
+        $value = (string) preg_replace('#^https?://[^/]+/#i', '', $value);
+        $value = trim($value, '/');
+
+        if (preg_match('/^(?:club|public|event)(\d+)$/i', $value, $matches)) {
+            return $matches[1];
+        }
+
+        return ltrim($value, '-');
+    }
+
+    /**
      * The user behind a user access token, or null when the token is a
      * community access token (users.get answers with error 27 for those).
      * Any other VK error surfaces as a validation error on the token field.
@@ -165,12 +192,15 @@ class VkController extends SocialController
     }
 
     /**
-     * Connect the community a community access token belongs to. Called with
-     * such a token and no group_id, groups.getById returns that community.
+     * Connect the community a community access token belongs to. VK has no
+     * API to resolve a community from its token, so the community comes from
+     * the form; groups.getOnlineStatus (callable only with the community's
+     * own token) then proves the token actually belongs to it.
      */
     private function storeCommunityAccount(Request $request, Workspace $workspace): InertiaResponse
     {
         $groups = $this->callVk($request->access_token, 'groups.getById', [
+            'group_ids' => $this->normalizeCommunity((string) $request->community),
             'fields' => 'screen_name,photo_200',
         ]);
 
@@ -178,7 +208,15 @@ class VkController extends SocialController
         $group = data_get($groups, 'groups.0') ?? data_get($groups, '0');
 
         if (! is_array($group)) {
-            throw ValidationException::withMessages(['access_token' => __('accounts.vk.invalid_token')]);
+            throw ValidationException::withMessages(['community' => __('accounts.vk.invalid_community')]);
+        }
+
+        $mismatch = Http::asForm()->post(VkApi::endpoint('groups.getOnlineStatus'), [
+            'group_id' => (int) data_get($group, 'id'),
+        ] + VkApi::baseParams($request->access_token))->json('error') !== null;
+
+        if ($mismatch) {
+            throw ValidationException::withMessages(['community' => __('accounts.vk.community_token_mismatch')]);
         }
 
         $ownerId = -(int) data_get($group, 'id');
