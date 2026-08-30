@@ -198,8 +198,9 @@ class VkController extends SocialController
     /**
      * Connect the community a community access token belongs to. VK has no
      * API to resolve a community from its token, so the community comes from
-     * the form; groups.getOnlineStatus (callable only with the community's
-     * own token) then proves the token actually belongs to it.
+     * the form; groups.getCallbackConfirmationCode (callable only with the
+     * community's own token, unlike groups.getOnlineStatus it does not need
+     * community messages to be enabled) then proves the token belongs to it.
      */
     private function storeCommunityAccount(Request $request, Workspace $workspace): InertiaResponse
     {
@@ -215,7 +216,7 @@ class VkController extends SocialController
             throw ValidationException::withMessages(['community' => __('accounts.vk.invalid_community')]);
         }
 
-        $mismatch = Http::asForm()->post(VkApi::endpoint('groups.getOnlineStatus'), [
+        $mismatch = Http::asForm()->post(VkApi::endpoint('groups.getCallbackConfirmationCode'), [
             'group_id' => (int) data_get($group, 'id'),
         ] + VkApi::baseParams($request->access_token))->json('error') !== null;
 
