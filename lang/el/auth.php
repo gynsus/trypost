@@ -22,7 +22,7 @@ return [
         'welcome_trial' => 'Καλώς ήρθατε στο TryPost! Η δοκιμαστική σας περίοδος ξεκίνησε.',
     ],
 
-    'legal' => 'Συνεχίζοντας, συμφωνείτε με τους <a href="https://trypost.it/terms" target="_blank">Όρους Χρήσης</a> και την <a href="https://trypost.it/privacy" target="_blank">Πολιτική Απορρήτου</a> μας.',
+    'legal' => 'Συνεχίζοντας, συμφωνείτε με τους <a href=":terms_url" target="_blank">Όρους Χρήσης</a> και την <a href=":privacy_url" target="_blank">Πολιτική Απορρήτου</a> μας.',
 
     'slides' => [
         'calendar' => [
@@ -135,11 +135,6 @@ return [
         'expired_title' => 'Αυτή η πρόσκληση δεν ισχύει πλέον',
         'expired_description' => 'Το workspace αυτής της πρόσκλησης διαγράφηκε. Ζητήστε νέα πρόσκληση από τον κάτοχο του λογαριασμού αν χρειάζεστε ακόμα πρόσβαση.',
         'expired_action' => 'Αρχική σελίδα',
-    ],
-
-    'footer' => [
-        'terms' => 'Όροι χρήσης',
-        'privacy' => 'Πολιτική απορρήτου',
     ],
 
 ];

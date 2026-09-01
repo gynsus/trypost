@@ -22,7 +22,7 @@ return [
         'welcome_trial' => 'TryPost へようこそ！トライアルが開始されました。',
     ],
 
-    'legal' => '続行すると、<a href="https://trypost.it/terms" target="_blank">利用規約</a>および<a href="https://trypost.it/privacy" target="_blank">プライバシーポリシー</a>に同意したものとみなされます。',
+    'legal' => '続行すると、<a href=":terms_url" target="_blank">利用規約</a>および<a href=":privacy_url" target="_blank">プライバシーポリシー</a>に同意したものとみなされます。',
 
     'slides' => [
         'calendar' => [
@@ -135,11 +135,6 @@ return [
         'expired_title' => 'この招待は無効です',
         'expired_description' => 'この招待のワークスペースは削除されました。引き続きアクセスが必要な場合は、アカウント所有者に新しい招待を依頼してください。',
         'expired_action' => 'ホームへ',
-    ],
-
-    'footer' => [
-        'terms' => '利用規約',
-        'privacy' => 'プライバシーポリシー',
     ],
 
 ];

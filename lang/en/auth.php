@@ -22,7 +22,7 @@ return [
         'welcome_trial' => 'Welcome to TryPost! Your trial has started.',
     ],
 
-    'legal' => 'By continuing, you agree to our <a href="https://trypost.it/terms" target="_blank">Terms of Service</a> and <a href="https://trypost.it/privacy" target="_blank">Privacy Policy</a>.',
+    'legal' => 'By continuing, you agree to our <a href=":terms_url" target="_blank">Terms of Service</a> and <a href=":privacy_url" target="_blank">Privacy Policy</a>.',
 
     'slides' => [
         'calendar' => [
@@ -135,11 +135,6 @@ return [
         'expired_title' => 'This invite is no longer valid',
         'expired_description' => 'The workspace for this invite was deleted. Ask the account owner for a new invite if you still need access.',
         'expired_action' => 'Go to home',
-    ],
-
-    'footer' => [
-        'terms' => 'Terms of Service',
-        'privacy' => 'Privacy Policy',
     ],
 
 ];

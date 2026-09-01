@@ -24,7 +24,7 @@ return [
         'welcome_trial' => 'Willkommen bei TryPost! Deine Testphase hat begonnen.',
     ],
 
-    'legal' => 'Indem du fortfährst, stimmst du unseren <a href="https://trypost.it/terms" target="_blank">Nutzungsbedingungen</a> und unserer <a href="https://trypost.it/privacy" target="_blank">Datenschutzerklärung</a> zu.',
+    'legal' => 'Indem du fortfährst, stimmst du unseren <a href=":terms_url" target="_blank">Nutzungsbedingungen</a> und unserer <a href=":privacy_url" target="_blank">Datenschutzerklärung</a> zu.',
 
     'slides' => [
         'calendar' => [
@@ -137,11 +137,6 @@ return [
         'expired_title' => 'Diese Einladung ist nicht mehr gültig',
         'expired_description' => 'Der Workspace für diese Einladung wurde gelöscht. Bitte den Kontoinhaber um eine neue Einladung, falls du weiterhin Zugriff brauchst.',
         'expired_action' => 'Zur Startseite',
-    ],
-
-    'footer' => [
-        'terms' => 'Nutzungsbedingungen',
-        'privacy' => 'Datenschutzerklärung',
     ],
 
 ];

@@ -22,7 +22,7 @@ return [
         'welcome_trial' => 'Welkom bij TryPost! Je proefperiode is gestart.',
     ],
 
-    'legal' => 'Door door te gaan ga je akkoord met onze <a href="https://trypost.it/terms" target="_blank">Servicevoorwaarden</a> en <a href="https://trypost.it/privacy" target="_blank">Privacybeleid</a>.',
+    'legal' => 'Door door te gaan ga je akkoord met onze <a href=":terms_url" target="_blank">Servicevoorwaarden</a> en <a href=":privacy_url" target="_blank">Privacybeleid</a>.',
 
     'slides' => [
         'calendar' => [
@@ -135,11 +135,6 @@ return [
         'expired_title' => 'Deze uitnodiging is niet meer geldig',
         'expired_description' => 'De workspace van deze uitnodiging is verwijderd. Vraag de accounteigenaar om een nieuwe uitnodiging als je nog toegang nodig hebt.',
         'expired_action' => 'Naar home',
-    ],
-
-    'footer' => [
-        'terms' => 'Servicevoorwaarden',
-        'privacy' => 'Privacybeleid',
     ],
 
 ];

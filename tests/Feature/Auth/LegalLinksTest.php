@@ -25,3 +25,15 @@ test('a self-hosted install can point the legal links at its own documents', fun
             ->where('legal.privacy', 'https://acme.test/legal/privacy')
         );
 });
+
+test('the legal sentence carries a url placeholder rather than a hardcoded host', function (string $locale) {
+    $sentence = require base_path("lang/{$locale}/auth.php");
+
+    expect($sentence['legal'])
+        ->toContain(':terms_url')
+        ->toContain(':privacy_url')
+        ->not->toContain('trypost.it');
+})->with(array_map(
+    fn (string $path) => basename(dirname($path)),
+    glob(dirname(__DIR__, 3).'/lang/*/auth.php'),
+));

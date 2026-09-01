@@ -20,24 +20,26 @@ function waitForLegalTestId(mixed $page, string $testId): void
     JS);
 }
 
-test('the login screen shows terms and privacy links to a logged out visitor', function () {
+test('the login screen shows the legal sentence to a logged out visitor', function () {
     $page = visit(route('login'));
 
-    waitForLegalTestId($page, 'legal-terms');
+    waitForLegalTestId($page, 'legal-links');
 
-    $page->assertVisible('@legal-terms')
-        ->assertVisible('@legal-privacy')
+    $page->assertVisible('@legal-links')
+        ->assertSee('Terms of Service')
+        ->assertSee('Privacy Policy')
         ->assertNoJavaScriptErrors();
 });
 
-test('the register screen shows terms and privacy links to a logged out visitor', function () {
+test('the register screen shows the legal sentence to a logged out visitor', function () {
     config(['trypost.self_hosted' => false]);
 
     $page = visit(route('register'));
 
-    waitForLegalTestId($page, 'legal-terms');
+    waitForLegalTestId($page, 'legal-links');
 
-    $page->assertVisible('@legal-terms')
-        ->assertVisible('@legal-privacy')
+    $page->assertVisible('@legal-links')
+        ->assertSee('Terms of Service')
+        ->assertSee('Privacy Policy')
         ->assertNoJavaScriptErrors();
 });

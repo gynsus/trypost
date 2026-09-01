@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { usePage } from '@inertiajs/vue3';
 import {
     IconCalendar,
     IconClock,
@@ -10,12 +9,6 @@ import {
 } from '@tabler/icons-vue';
 import { trans } from 'laravel-vue-i18n';
 import { onBeforeUnmount, onMounted, ref, computed } from 'vue';
-
-import type { SharedData } from '@/types';
-
-const page = usePage<SharedData>();
-
-const legal = computed(() => page.props.legal);
 
 defineProps<{
     title?: string;
@@ -116,26 +109,6 @@ const platforms = [
                     </div>
                 </div>
             </div>
-
-            <footer class="flex items-center justify-center gap-4 text-xs text-muted-foreground">
-                <a
-                    :href="legal.terms"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    data-testid="legal-terms"
-                    class="underline underline-offset-2 hover:text-foreground"
-                    >{{ $t('auth.footer.terms') }}</a
-                >
-                <span aria-hidden="true">·</span>
-                <a
-                    :href="legal.privacy"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    data-testid="legal-privacy"
-                    class="underline underline-offset-2 hover:text-foreground"
-                    >{{ $t('auth.footer.privacy') }}</a
-                >
-            </footer>
         </div>
 
         <div
