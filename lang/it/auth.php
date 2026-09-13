@@ -109,6 +109,13 @@ return [
         'submit' => 'Reimposta password',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'In attesa di approvazione',
+        'title' => 'Il tuo account è in attesa di approvazione',
+        'description' => 'Un amministratore deve approvare i nuovi account prima dell\'uso. Riceverai un\'email non appena il tuo account sarà approvato.',
+        'log_out' => 'Esci',
+    ],
+
     'verify_email' => [
         'title' => 'Verifica email',
         'description' => 'Verifica il tuo indirizzo email cliccando sul link che ti abbiamo appena inviato.',

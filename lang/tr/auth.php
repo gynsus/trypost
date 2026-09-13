@@ -111,6 +111,13 @@ return [
         'submit' => 'Parolayı sıfırla',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Onay bekleniyor',
+        'title' => 'Hesabınız onay bekliyor',
+        'description' => 'Yeni hesapların kullanılabilmesi için bir yöneticinin onayı gerekir. Hesabınız onaylanır onaylanmaz bir e-posta alacaksınız.',
+        'log_out' => 'Çıkış yap',
+    ],
+
     'verify_email' => [
         'title' => 'E-postayı doğrula',
         'description' => 'Lütfen size e-postayla gönderdiğimiz bağlantıya tıklayarak e-posta adresinizi doğrulayın.',

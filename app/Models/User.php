@@ -42,6 +42,7 @@ class User extends Authenticatable implements HasLocalePreference, MustVerifyEma
         'account_id',
         'current_workspace_id',
         'email_verified_at',
+        'approved_at',
         'utm_source',
         'utm_medium',
         'utm_campaign',
@@ -93,10 +94,21 @@ class User extends Authenticatable implements HasLocalePreference, MustVerifyEma
         return (string) Str::of($this->name ?? '')->trim()->before(' ');
     }
 
+    /**
+     * Open self-hosted registration leaves approved_at empty until an
+     * administrator approves the account; every other signup path creates
+     * the user approved right away.
+     */
+    public function isPendingApproval(): bool
+    {
+        return $this->approved_at === null;
+    }
+
     protected function casts(): array
     {
         return [
             'email_verified_at' => 'datetime',
+            'approved_at' => 'datetime',
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
             'persona' => Persona::class,

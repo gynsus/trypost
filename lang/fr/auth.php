@@ -109,6 +109,13 @@ return [
         'submit' => 'Réinitialiser le mot de passe',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'En attente d\'approbation',
+        'title' => 'Votre compte est en attente d\'approbation',
+        'description' => 'Un administrateur doit approuver les nouveaux comptes avant leur utilisation. Vous recevrez un e-mail dès que votre compte sera approuvé.',
+        'log_out' => 'Se déconnecter',
+    ],
+
     'verify_email' => [
         'title' => 'Vérifier l\'e-mail',
         'description' => 'Veuillez vérifier votre adresse e-mail en cliquant sur le lien que nous venons de vous envoyer.',

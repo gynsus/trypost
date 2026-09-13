@@ -97,6 +97,13 @@ return [
         'submit' => 'Restablecer contraseña',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Pendiente de aprobación',
+        'title' => 'Tu cuenta está pendiente de aprobación',
+        'description' => 'Un administrador debe aprobar las cuentas nuevas antes de poder usarlas. Recibirás un correo en cuanto tu cuenta sea aprobada.',
+        'log_out' => 'Cerrar sesión',
+    ],
+
     'verify_email' => [
         'title' => 'Verificar correo',
         'description' => 'Verifica tu correo electrónico haciendo clic en el enlace que acabamos de enviarte.',

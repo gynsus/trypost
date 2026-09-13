@@ -109,6 +109,13 @@ return [
         'submit' => 'Redefinir senha',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Aguardando aprovação',
+        'title' => 'Sua conta está aguardando aprovação',
+        'description' => 'Um administrador precisa aprovar novas contas antes do uso. Você receberá um e-mail assim que sua conta for aprovada.',
+        'log_out' => 'Sair',
+    ],
+
     'verify_email' => [
         'title' => 'Verificar email',
         'description' => 'Por favor, verifique seu endereço de email clicando no link que acabamos de enviar.',

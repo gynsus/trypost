@@ -109,6 +109,13 @@ return [
         'submit' => '重置密码',
     ],
 
+    'pending_approval' => [
+        'page_title' => '等待审批',
+        'title' => '您的账户正在等待审批',
+        'description' => '新账户需要管理员审批后才能使用。账户获批后您将收到邮件通知。',
+        'log_out' => '退出登录',
+    ],
+
     'verify_email' => [
         'title' => '验证邮箱',
         'description' => '请点击我们刚刚发送到你邮箱的链接以验证你的邮箱地址。',

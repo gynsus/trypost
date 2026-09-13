@@ -109,6 +109,13 @@ return [
         'submit' => '비밀번호 재설정',
     ],
 
+    'pending_approval' => [
+        'page_title' => '승인 대기 중',
+        'title' => '계정이 승인 대기 중입니다',
+        'description' => '새 계정은 관리자의 승인 후에 사용할 수 있습니다. 계정이 승인되는 대로 이메일로 알려드립니다.',
+        'log_out' => '로그아웃',
+    ],
+
     'verify_email' => [
         'title' => '이메일 인증',
         'description' => '방금 보내드린 이메일의 링크를 클릭하여 이메일 주소를 인증해 주세요.',

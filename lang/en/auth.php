@@ -109,6 +109,13 @@ return [
         'submit' => 'Reset password',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Awaiting approval',
+        'title' => 'Your account is awaiting approval',
+        'description' => 'An administrator has to approve new accounts before they can be used. You will get an email as soon as your account is approved.',
+        'log_out' => 'Log out',
+    ],
+
     'verify_email' => [
         'title' => 'Verify email',
         'description' => 'Please verify your email address by clicking on the link we just emailed to you.',

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Auth\AcceptInviteController;
+use App\Http\Controllers\Auth\ApproveUserController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\EmailVerificationNotificationController;
 use App\Http\Controllers\Auth\EmailVerificationPromptController;
@@ -10,11 +11,17 @@ use App\Http\Controllers\Auth\GitHubController;
 use App\Http\Controllers\Auth\GoogleController;
 use App\Http\Controllers\Auth\NewPasswordController;
 use App\Http\Controllers\Auth\PasswordResetLinkController;
+use App\Http\Controllers\Auth\PendingApprovalController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\Auth\VerifyEmailController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/invites/{invite}', [AcceptInviteController::class, 'show'])->name('app.invites.show');
+
+// Approve a pending registration via the signed link from the admin email.
+Route::get('/approve-user/{user}', ApproveUserController::class)
+    ->middleware('signed')
+    ->name('users.approve');
 
 Route::middleware(['guest'])->group(function () {
     Route::middleware('registration.enabled')->group(function () {
@@ -43,6 +50,10 @@ Route::get('/auth/google/callback', [GoogleController::class, 'callback'])->name
 Route::get('/auth/github/callback', [GitHubController::class, 'callback'])->name('auth.github.callback');
 
 Route::middleware(['auth'])->group(function () {
+    Route::get('/register/success', SignupSuccessController::class)->name('register.success');
+
+    Route::get('/pending-approval', PendingApprovalController::class)->name('approval.pending');
+
     Route::get('/verify-email', EmailVerificationPromptController::class)->name('verification.notice');
 
     Route::get('/verify-email/{id}/{hash}', VerifyEmailController::class)

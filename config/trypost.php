@@ -137,6 +137,14 @@ return [
     // to let visitors register without an invite (client-facing instances).
     'registration_open' => env('REGISTRATION_OPEN', false),
 
+    // Openly registered accounts wait for administrator approval before they
+    // can use the app. The approval email goes to ADMIN_EMAIL (falls back to
+    // the mail from-address); approve via the emailed link or
+    // `php artisan users:approve <email>`.
+    'registration_requires_approval' => env('REGISTRATION_REQUIRES_APPROVAL', true),
+
+    'admin_email' => env('ADMIN_EMAIL'),
+
     /*
     |--------------------------------------------------------------------------
     | Repurpose

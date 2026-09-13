@@ -109,6 +109,13 @@ return [
         'submit' => 'Wachtwoord opnieuw instellen',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Wacht op goedkeuring',
+        'title' => 'Je account wacht op goedkeuring',
+        'description' => 'Nieuwe accounts moeten door een beheerder worden goedgekeurd. Je ontvangt een e-mail zodra je account is goedgekeurd.',
+        'log_out' => 'Uitloggen',
+    ],
+
     'verify_email' => [
         'title' => 'E-mail verifiëren',
         'description' => 'Verifieer je e-mailadres door op de link te klikken die we je zojuist per e-mail hebben gestuurd.',

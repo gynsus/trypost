@@ -109,6 +109,13 @@ return [
         'submit' => 'Zresetuj hasło',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Oczekuje na zatwierdzenie',
+        'title' => 'Twoje konto oczekuje na zatwierdzenie',
+        'description' => 'Nowe konta musi zatwierdzić administrator. Otrzymasz e-mail, gdy tylko Twoje konto zostanie zatwierdzone.',
+        'log_out' => 'Wyloguj się',
+    ],
+
     'verify_email' => [
         'title' => 'Zweryfikuj e-mail',
         'description' => 'Zweryfikuj swój adres e-mail, klikając w link, który właśnie do Ciebie wysłaliśmy.',

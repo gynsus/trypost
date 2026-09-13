@@ -111,6 +111,13 @@ return [
         'submit' => 'Passwort zurücksetzen',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Warten auf Freigabe',
+        'title' => 'Dein Konto wartet auf Freigabe',
+        'description' => 'Neue Konten müssen von einem Administrator freigegeben werden. Du erhältst eine E-Mail, sobald dein Konto freigegeben ist.',
+        'log_out' => 'Abmelden',
+    ],
+
     'verify_email' => [
         'title' => 'E-Mail bestätigen',
         'description' => 'Bitte bestätige deine E-Mail-Adresse, indem du auf den Link klickst, den wir dir gerade per E-Mail gesendet haben.',

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Middleware\Api\LoadWorkspaceFromToken;
 use App\Http\Middleware\App\EnsureRegistrationEnabled;
+use App\Http\Middleware\App\EnsureUserIsApproved;
 use App\Http\Middleware\App\HandleInertiaRequests;
 use App\Http\Middleware\App\SetLocale;
 use Illuminate\Foundation\Application;
@@ -37,6 +38,7 @@ return Application::configure(basePath: dirname(__DIR__))
             SetLocale::class,
             HandleInertiaRequests::class,
             AddLinkHeadersForPreloadedAssets::class,
+            EnsureUserIsApproved::class,
         ]);
 
         $middleware->alias([
