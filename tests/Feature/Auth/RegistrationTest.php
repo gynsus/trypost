@@ -195,3 +195,21 @@ test('register works normally when not self_hosted even with pending invite in s
     // Cleared regardless of mode, since signup consumes the marker.
     expect(session('pending_invite_id'))->toBeNull();
 });
+
+test('register page opens on self_hosted when registration_open is enabled', function () {
+    config()->set('trypost.self_hosted', true);
+    config()->set('trypost.registration_open', true);
+
+    $this->get(route('register'))->assertOk();
+});
+
+test('authenticated users hitting the login page are sent to the calendar', function () {
+    $user = \App\Models\User::factory()->create();
+    $workspace = \App\Models\Workspace::factory()->create(['user_id' => $user->id]);
+    $user->update(['current_workspace_id' => $workspace->id]);
+    $workspace->members()->attach($user->id, ['role' => \App\Enums\UserWorkspace\Role::Member->value]);
+
+    $this->actingAs($user)
+        ->get(route('login'))
+        ->assertRedirect(route('app.calendar'));
+});
