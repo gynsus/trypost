@@ -28,6 +28,11 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->encryptCookies(except: ['sidebar_state']);
 
+        // Authenticated users hitting guest pages (/login, /register) go
+        // straight to the app instead of `/`, which self-hosted setups may
+        // serve as a public landing page outside the application.
+        $middleware->redirectUsersTo(fn () => route('app.calendar'));
+
         $middleware->web(append: [
             SetLocale::class,
             HandleInertiaRequests::class,

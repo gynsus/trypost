@@ -133,6 +133,10 @@ return [
 
     'user_agent' => env('TRYPOST_USER_AGENT', 'TryPost.it/1.0 (+https://trypost.it)'),
 
+    // Self-hosted mode is invite-only by default; set REGISTRATION_OPEN=true
+    // to let visitors register without an invite (client-facing instances).
+    'registration_open' => env('REGISTRATION_OPEN', false),
+
     /*
     |--------------------------------------------------------------------------
     | Repurpose

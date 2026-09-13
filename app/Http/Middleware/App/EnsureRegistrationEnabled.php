@@ -17,6 +17,13 @@ class EnsureRegistrationEnabled
             return $next($request);
         }
 
+        // Self-hosted installs are invite-only by default, but an operator
+        // running the instance as a client-facing service can open public
+        // registration explicitly (REGISTRATION_OPEN=true).
+        if (config('trypost.registration_open')) {
+            return $next($request);
+        }
+
         // `query` covers the GET form; `input` covers the invite field posted
         // with the registration form (a hidden input, not a query param).
         $inviteId = $request->query('invite') ?? $request->input('invite') ?? $request->session()->get('pending_invite_id');
