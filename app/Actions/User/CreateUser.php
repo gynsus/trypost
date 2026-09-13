@@ -13,10 +13,13 @@ use App\Enums\User\WeekStart;
 use App\Jobs\PostHog\SyncUser;
 use App\Models\Account;
 use App\Models\Plan;
+use App\Mail\UserPendingApproval;
 use App\Models\User;
 use App\Services\PostHogService;
 use App\Support\Timezone;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\URL;
 
 class CreateUser
 {
@@ -50,6 +53,7 @@ class CreateUser
                 'google_id' => data_get($data, 'google_id'),
                 'github_id' => data_get($data, 'github_id'),
                 'email_verified_at' => data_get($data, 'email_verified_at', $isInviteRegistration ? now() : null),
+                'approved_at' => self::requiresApproval($isInviteRegistration) ? null : now(),
                 'account_id' => $account->id,
                 'registration_ip' => data_get($data, 'registration_ip'),
                 'locale' => $locale,
@@ -86,6 +90,30 @@ class CreateUser
             }
         }
 
+        if ($user->isPendingApproval()) {
+            $adminEmail = config('trypost.admin_email') ?: config('mail.from.address');
+
+            if ($adminEmail) {
+                Mail::to($adminEmail)->send(new UserPendingApproval(
+                    $user,
+                    URL::signedRoute('users.approve', ['user' => $user->id]),
+                ));
+            }
+        }
+
         return $user;
+    }
+
+    /**
+     * Only open self-hosted registrations wait for administrator approval;
+     * invited users were vetted by the workspace owner, and the hosted
+     * product gates access through billing instead.
+     */
+    private static function requiresApproval(bool $isInviteRegistration): bool
+    {
+        return ! $isInviteRegistration
+            && config('trypost.self_hosted')
+            && config('trypost.registration_open')
+            && config('trypost.registration_requires_approval');
     }
 }
