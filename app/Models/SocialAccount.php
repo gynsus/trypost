@@ -289,9 +289,10 @@ class SocialAccount extends Model
     /**
      * "@handle" for notification bodies — the more specific identifier
      * (username) wins over the friendlier display name when both are set.
-     * Every connector requests enough scope to always populate at least one
-     * of username/display_name (e.g. TikTok always requests user.info.profile);
-     * the platform label is a last-resort fallback, not an expected path.
+     * Connectors normally populate at least one of username/display_name
+     * (TikTok Login Kit still returns display_name via user.info.basic;
+     * username needs user.info.profile, which self-hosters may trim).
+     * The platform label is a last-resort fallback, not an expected path.
      */
     public function handle(): string
     {
