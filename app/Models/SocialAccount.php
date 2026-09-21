@@ -14,6 +14,7 @@ use App\Exceptions\SocialAccount\NetworkAlreadyConnectedException;
 use App\Jobs\SendNotification;
 use App\Mail\AccountDisconnected;
 use App\Observers\SocialAccountObserver;
+use App\Support\GoogleBusinessResourceName;
 use Database\Factories\SocialAccountFactory;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
@@ -274,6 +275,11 @@ class SocialAccount extends Model
                         ? rtrim((string) data_get($this->meta, 'instance'), '/')."/@{$username}"
                         : null,
                     SocialPlatform::Telegram => $username ? "https://t.me/{$username}" : null,
+                    SocialPlatform::GoogleBusiness => filled(data_get($this->meta, 'maps_uri'))
+                        ? (string) data_get($this->meta, 'maps_uri')
+                        : (filled(data_get($this->meta, 'location_id'))
+                            ? GoogleBusinessResourceName::dashboardUrl((string) data_get($this->meta, 'location_id'))
+                            : null),
                     default => null,
                 };
             },
