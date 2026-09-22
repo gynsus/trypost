@@ -124,6 +124,7 @@ test('platform is enabled by default for every platform', function (Platform $pl
     Platform::Telegram,
     Platform::Discord,
     Platform::GoogleBusiness,
+    Platform::Vk,
 ]);
 
 test('each platform can be disabled via config', function (Platform $platform) {
@@ -146,6 +147,7 @@ test('each platform can be disabled via config', function (Platform $platform) {
     Platform::Telegram,
     Platform::Discord,
     Platform::GoogleBusiness,
+    Platform::Vk,
 ]);
 
 test('each platform maps to its publishing queue', function (Platform $platform, string $queue) {
@@ -166,6 +168,7 @@ test('each platform maps to its publishing queue', function (Platform $platform,
     [Platform::Telegram, 'social-telegram'],
     [Platform::Discord, 'social-discord'],
     [Platform::GoogleBusiness, 'social-google_business'],
+    [Platform::Vk, 'social-vk'],
 ]);
 
 test('allQueues lists every platform publishing queue in enum order', function () {
@@ -185,6 +188,7 @@ test('allQueues lists every platform publishing queue in enum order', function (
         'social-telegram',
         'social-discord',
         'social-google_business',
+        'social-vk',
     ])->and(Platform::allQueues())->toHaveCount(count(Platform::cases()));
 });
 
@@ -234,6 +238,7 @@ test('disabling a platform removes only its queue from enabledQueues', function 
     Platform::Telegram,
     Platform::Discord,
     Platform::GoogleBusiness,
+    Platform::Vk,
 ]);
 
 test('disabling every platform yields no enabled queues', function () {
