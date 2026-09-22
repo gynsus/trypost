@@ -642,6 +642,10 @@ return [
             'label' => 'Publication',
             'description' => 'Apparaît dans votre Profil Entreprise dans la Recherche et Cartes',
         ],
+        'vk_post' => [
+            'label' => 'Publication',
+            'description' => 'Publication texte avec médias facultatifs',
+        ],
     ],
 
     'platforms' => [
@@ -767,6 +771,7 @@ return [
                 'mastodon_post' => 'Publication Mastodon',
                 'telegram_post' => 'Publication Telegram',
                 'discord_message' => 'Message Discord',
+                'vk_post' => 'Publication VK',
                 'facebook_post' => 'Publication Facebook',
                 'pinterest_pin' => 'Épingle Pinterest',
                 'instagram_story' => 'Story Instagram',

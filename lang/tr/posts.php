@@ -644,6 +644,10 @@ return [
             'label' => 'Gönderi',
             'description' => 'İşletme Profilinde Arama ve Haritalar\'da görünür',
         ],
+        'vk_post' => [
+            'label' => 'Gönderi',
+            'description' => 'İsteğe bağlı medya içeren metin gönderisi',
+        ],
     ],
 
     'platforms' => [
@@ -769,6 +773,7 @@ return [
                 'mastodon_post' => 'Mastodon Gönderisi',
                 'telegram_post' => 'Telegram Gönderisi',
                 'discord_message' => 'Discord Mesajı',
+                'vk_post' => 'VK Gönderisi',
                 'facebook_post' => 'Facebook Gönderisi',
                 'pinterest_pin' => 'Pinterest Pin\'i',
                 'instagram_story' => 'Instagram Hikayesi',

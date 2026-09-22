@@ -642,6 +642,10 @@ return [
             'label' => 'Post',
             'description' => 'Appears on your Business Profile in Search and Maps',
         ],
+        'vk_post' => [
+            'label' => 'Post',
+            'description' => 'Text post with optional media',
+        ],
     ],
 
     'platforms' => [
@@ -767,6 +771,7 @@ return [
                 'mastodon_post' => 'Mastodon Post',
                 'telegram_post' => 'Telegram Post',
                 'discord_message' => 'Discord Message',
+                'vk_post' => 'VK Post',
                 'facebook_post' => 'Facebook Post',
                 'pinterest_pin' => 'Pinterest Pin',
                 'instagram_story' => 'Instagram Story',

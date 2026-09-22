@@ -642,6 +642,10 @@ return [
             'label' => 'Bericht',
             'description' => 'Wordt weergegeven in je Bedrijfsprofiel in Zoeken en Kaarten',
         ],
+        'vk_post' => [
+            'label' => 'Bericht',
+            'description' => 'Tekstbericht met optionele media',
+        ],
     ],
 
     'platforms' => [
@@ -767,6 +771,7 @@ return [
                 'mastodon_post' => 'Mastodon-post',
                 'telegram_post' => 'Telegram-post',
                 'discord_message' => 'Discord-bericht',
+                'vk_post' => 'VK-bericht',
                 'facebook_post' => 'Facebook-post',
                 'pinterest_pin' => 'Pinterest-pin',
                 'instagram_story' => 'Instagram-story',
