@@ -166,6 +166,7 @@ test('each platform maps to its publishing queue', function (Platform $platform,
     [Platform::Telegram, 'social-telegram'],
     [Platform::Discord, 'social-discord'],
     [Platform::GoogleBusiness, 'social-google_business'],
+    [Platform::Vk, 'social-vk'],
 ]);
 
 test('allQueues lists every platform publishing queue in enum order', function () {
@@ -185,6 +186,7 @@ test('allQueues lists every platform publishing queue in enum order', function (
         'social-telegram',
         'social-discord',
         'social-google_business',
+        'social-vk',
     ])->and(Platform::allQueues())->toHaveCount(count(Platform::cases()));
 });
 
