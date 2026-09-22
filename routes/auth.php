@@ -50,8 +50,6 @@ Route::get('/auth/google/callback', [GoogleController::class, 'callback'])->name
 Route::get('/auth/github/callback', [GitHubController::class, 'callback'])->name('auth.github.callback');
 
 Route::middleware(['auth'])->group(function () {
-    Route::get('/register/success', SignupSuccessController::class)->name('register.success');
-
     Route::get('/pending-approval', PendingApprovalController::class)->name('approval.pending');
 
     Route::get('/verify-email', EmailVerificationPromptController::class)->name('verification.notice');
