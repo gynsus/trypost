@@ -146,9 +146,10 @@ return [
             'settings' => 'Paramètres YouTube',
             'posting_to' => 'Publication sur',
             'description' => 'Description',
-            'description_placeholder' => 'Description complète de la vidéo : infos, liens, hashtags…',
-            'description_hint' => 'Jusqu\'à 5000 caractères, les liens sont cliquables. Si vide, le texte de la publication est utilisé.',
-            'description_max' => 'La description ne peut pas dépasser 5000 caractères.',
+            'description_placeholder' => 'Description de la vidéo',
+            'description_max' => 'La description YouTube ne doit pas dépasser 5 000 octets.',
+            'description_invalid' => 'La description YouTube doit être un texte valide.',
+            'description_bytes' => ':used / :limit octets',
         ],
         'first_comment' => [
             'label' => 'Premier commentaire',

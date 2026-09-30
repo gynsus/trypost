@@ -146,9 +146,10 @@ return [
             'settings' => 'YouTube-instellingen',
             'posting_to' => 'Publiceren op',
             'description' => 'Beschrijving',
-            'description_placeholder' => 'Volledige videobeschrijving: feiten, links, hashtags…',
-            'description_hint' => 'Tot 5000 tekens, links zijn klikbaar. Indien leeg wordt de berichttekst gebruikt.',
-            'description_max' => 'De beschrijving mag niet langer zijn dan 5000 tekens.',
+            'description_placeholder' => 'Videobeschrijving',
+            'description_max' => 'De YouTube-beschrijving mag niet langer zijn dan 5.000 bytes.',
+            'description_invalid' => 'De YouTube-beschrijving moet geldige tekst zijn.',
+            'description_bytes' => ':used / :limit bytes',
         ],
         'first_comment' => [
             'label' => 'Eerste reactie',

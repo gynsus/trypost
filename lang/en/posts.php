@@ -146,9 +146,10 @@ return [
             'settings' => 'YouTube settings',
             'posting_to' => 'Posting to',
             'description' => 'Description',
-            'description_placeholder' => 'Full video description: facts, links, hashtags…',
-            'description_hint' => 'Up to 5000 characters, links are clickable. When empty, the post text is used.',
-            'description_max' => 'Description may not exceed 5000 characters.',
+            'description_placeholder' => 'Video description',
+            'description_max' => 'The YouTube description must not exceed 5,000 bytes.',
+            'description_invalid' => 'The YouTube description must be valid text.',
+            'description_bytes' => ':used / :limit bytes',
         ],
         'first_comment' => [
             'label' => 'First comment',

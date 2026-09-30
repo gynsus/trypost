@@ -146,11 +146,12 @@ return [
         ],
         'youtube' => [
             'settings' => 'YouTube ayarları',
-            'posting_to' => 'Şurada yayınlanıyor',
+            'posting_to' => 'Yayınlanacak hesap',
             'description' => 'Açıklama',
-            'description_placeholder' => 'Videonun tam açıklaması: bilgiler, bağlantılar, etiketler…',
-            'description_hint' => 'En fazla 5000 karakter, bağlantılar tıklanabilir. Boşsa gönderi metni kullanılır.',
-            'description_max' => 'Açıklama 5000 karakteri aşamaz.',
+            'description_placeholder' => 'Video açıklaması',
+            'description_max' => 'YouTube açıklaması 5.000 baytı aşmamalıdır.',
+            'description_invalid' => 'YouTube açıklaması geçerli bir metin olmalıdır.',
+            'description_bytes' => ':used / :limit bayt',
         ],
         'first_comment' => [
             'label' => 'İlk yorum',

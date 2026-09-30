@@ -146,9 +146,10 @@ return [
             'settings' => 'YouTube設定',
             'posting_to' => '投稿先',
             'description' => '説明',
-            'description_placeholder' => '動画の詳細説明:情報、リンク、ハッシュタグなど…',
-            'description_hint' => '最大5000文字、リンクはクリック可能です。空の場合は投稿テキストが使われます。',
-            'description_max' => '説明は5000文字を超えられません。',
+            'description_placeholder' => '動画の説明',
+            'description_max' => 'YouTubeの説明は5,000バイト以内にしてください。',
+            'description_invalid' => 'YouTubeの説明には有効なテキストを入力してください。',
+            'description_bytes' => ':used / :limit バイト',
         ],
         'first_comment' => [
             'label' => '最初のコメント',

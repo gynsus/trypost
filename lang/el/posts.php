@@ -146,9 +146,10 @@ return [
             'settings' => 'Ρυθμίσεις YouTube',
             'posting_to' => 'Δημοσίευση σε',
             'description' => 'Περιγραφή',
-            'description_placeholder' => 'Πλήρης περιγραφή βίντεο: πληροφορίες, σύνδεσμοι, hashtags…',
-            'description_hint' => 'Έως 5000 χαρακτήρες, οι σύνδεσμοι είναι κλικαρίσιμοι. Αν είναι κενό, χρησιμοποιείται το κείμενο της ανάρτησης.',
-            'description_max' => 'Η περιγραφή δεν μπορεί να υπερβαίνει τους 5000 χαρακτήρες.',
+            'description_placeholder' => 'Περιγραφή βίντεο',
+            'description_max' => 'Η περιγραφή YouTube δεν πρέπει να υπερβαίνει τα 5.000 byte.',
+            'description_invalid' => 'Η περιγραφή YouTube πρέπει να είναι έγκυρο κείμενο.',
+            'description_bytes' => ':used / :limit byte',
         ],
         'first_comment' => [
             'label' => 'Πρώτο σχόλιο',

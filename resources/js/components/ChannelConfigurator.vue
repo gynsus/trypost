@@ -25,12 +25,10 @@ const props = withDefaults(defineProps<{
     media?: MediaItem[];
     videoDurationSec?: number | null;
     disabled?: boolean;
-    previewOnly?: boolean;
 }>(), {
     media: () => [],
     videoDurationSec: null,
     disabled: false,
-    previewOnly: false,
 });
 
 const emit = defineEmits<{
@@ -173,25 +171,20 @@ const settingsProps = (channel: Channel) => ({
                 :platform="channel.platform"
                 :media="media"
             />
+            <YouTubeSettings
+                v-else-if="channel.platform === Platform.YouTube"
+                v-bind="settingsProps(channel)"
+                :platform-index="index"
+            />
             <GoogleBusinessSettings
                 v-else-if="channel.platform === Platform.GoogleBusiness"
                 :social-account="channel.socialAccount"
                 :platform-index="index"
                 :meta="channel.meta"
                 :disabled="disabled"
-                :preview-only="previewOnly"
                 @update:meta="emit('update:meta', channel.id, $event)"
             />
             <DiscordSettings v-else-if="channel.platform === Platform.Discord" v-bind="settingsProps(channel)" />
-            <YouTubeSettings
-                v-else-if="channel.platform === Platform.YouTube"
-                :social-account="channel.socialAccount"
-                :platform="channel.platform"
-                :meta="channel.meta"
-                :disabled="disabled"
-                :preview-only="previewOnly"
-                @update:meta="emit('update:meta', channel.id, $event)"
-            />
         </template>
     </div>
 </template>

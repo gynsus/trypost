@@ -146,9 +146,10 @@ return [
             'settings' => 'Налаштування YouTube',
             'posting_to' => 'Публікація в',
             'description' => 'Опис',
-            'description_placeholder' => 'Повний опис відео: факти, посилання, хештеги…',
-            'description_hint' => 'До 5000 знаків, посилання клікабельні. Якщо порожньо — використовується текст поста.',
-            'description_max' => 'Опис не може перевищувати 5000 знаків.',
+            'description_placeholder' => 'Опис відео',
+            'description_max' => 'Опис YouTube не повинен перевищувати 5000 байтів.',
+            'description_invalid' => 'Опис YouTube має бути коректним текстом.',
+            'description_bytes' => ':used / :limit байтів',
         ],
         'first_comment' => [
             'label' => 'Перший коментар',

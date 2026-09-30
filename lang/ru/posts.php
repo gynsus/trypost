@@ -146,9 +146,10 @@ return [
             'settings' => 'Настройки YouTube',
             'posting_to' => 'Публикация в',
             'description' => 'Описание',
-            'description_placeholder' => 'Полное описание ролика: факты, ссылки, хэштеги…',
-            'description_hint' => 'До 5000 знаков, ссылки кликабельны. Если пусто — используется текст поста.',
-            'description_max' => 'Описание не может быть длиннее 5000 знаков.',
+            'description_placeholder' => 'Описание видео',
+            'description_max' => 'Описание YouTube не должно превышать 5000 байт.',
+            'description_invalid' => 'Описание YouTube должно быть корректным текстом.',
+            'description_bytes' => ':used / :limit байт',
         ],
         'first_comment' => [
             'label' => 'Первый комментарий',

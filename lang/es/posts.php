@@ -143,12 +143,13 @@ return [
             'document_title_placeholder' => 'Se muestra en tu publicación de documento PDF',
         ],
         'youtube' => [
-            'settings' => 'Ajustes de YouTube',
+            'settings' => 'Configuración de YouTube',
             'posting_to' => 'Publicando en',
             'description' => 'Descripción',
-            'description_placeholder' => 'Descripción completa del vídeo: datos, enlaces, hashtags…',
-            'description_hint' => 'Hasta 5000 caracteres, los enlaces son clicables. Si está vacío, se usa el texto de la publicación.',
-            'description_max' => 'La descripción no puede superar los 5000 caracteres.',
+            'description_placeholder' => 'Descripción del vídeo',
+            'description_max' => 'La descripción de YouTube no puede superar los 5.000 bytes.',
+            'description_invalid' => 'La descripción de YouTube debe ser texto válido.',
+            'description_bytes' => ':used / :limit bytes',
         ],
         'first_comment' => [
             'label' => 'Primer comentario',

@@ -144,11 +144,12 @@ return [
         ],
         'youtube' => [
             'settings' => 'إعدادات YouTube',
-            'posting_to' => 'النشر في',
+            'posting_to' => 'النشر على',
             'description' => 'الوصف',
-            'description_placeholder' => 'الوصف الكامل للفيديو: معلومات وروابط ووسوم…',
-            'description_hint' => 'حتى 5000 حرف، والروابط قابلة للنقر. إذا تُرك فارغًا يُستخدم نص المنشور.',
-            'description_max' => 'لا يمكن أن يتجاوز الوصف 5000 حرف.',
+            'description_placeholder' => 'وصف الفيديو',
+            'description_max' => 'يجب ألا يتجاوز وصف YouTube ‏5000 بايت.',
+            'description_invalid' => 'يجب أن يكون وصف YouTube نصًا صالحًا.',
+            'description_bytes' => ':used / :limit بايت',
         ],
         'first_comment' => [
             'label' => 'التعليق الأول',
