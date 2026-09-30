@@ -164,11 +164,10 @@ enum Platform: string
      *  - LinkedIn UGC: 3000 (`commentary` field)
      *  - X standard tweet: 280 (X Premium accepts 25K — ignored, conservative)
      *  - TikTok caption: 2200
-     *  - YouTube Shorts: description=5000 (the cap here). The title never
-     *    overflows: it comes from `meta.title` (validated at 100) or is
-     *    derived from the first content line and truncated by `buildTitle`;
-     *    the full content goes to the description unless `meta.description`
-     *    overrides it.
+     *  - YouTube Shorts: content supplies the title, capped at 100 characters
+     *    (publisher derives it from the first line via `buildTitle`). Optional
+     *    meta.description is separate plain text, capped at 5000 UTF-8 bytes;
+     *    absent descriptions fall back to content.
      *  - Facebook text status: 10000 (API allows 63206; we cap below
      *    that — 63k-char posts are unrealistic and emoji-heavy content
      *    risks overflowing the TEXT column's 65535-byte ceiling)
@@ -187,7 +186,7 @@ enum Platform: string
             self::LinkedIn, self::LinkedInPage => 3000,
             self::X => 280,
             self::TikTok => 2200,
-            self::YouTube => 5000,
+            self::YouTube => 100,
             self::Facebook => 10000,
             self::Instagram, self::InstagramFacebook => 2200,
             self::Threads => 500,
