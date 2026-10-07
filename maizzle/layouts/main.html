@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml">
+<html lang="@{{ str_replace('_', '-', app()->getLocale()) }}" dir="@{{ \App\Enums\User\Locale::tryFrom(app()->getLocale())?->direction() ?? 'ltr' }}" xmlns:v="urn:schemas-microsoft-com:vml">
 
 <head>
   <meta charset="utf-8">
@@ -45,7 +45,7 @@
     <each loop="item in Array.from(Array(150))">&#8199;&#65279;&#847; </each>
   </div>
   @endif
-  <div role="article" aria-roledescription="email" aria-label="@{{ $title }}" lang="en">
+  <div role="article" aria-roledescription="email" aria-label="@{{ $title }}" lang="@{{ str_replace('_', '-', app()->getLocale()) }}">
     <yield />
   </div>
 </body>

@@ -132,3 +132,28 @@ test('platform returns tiktok', function () {
 
     expect($exception->platform())->toBe('tiktok');
 });
+
+test('documented init refusals map to their category', function (string $code, int $status, ErrorCategory $category) {
+    $fakeResponse = Http::fake(['*' => Http::response([
+        'error' => ['code' => $code, 'message' => 'Refused.', 'log_id' => 'init123'],
+    ], $status)])->post(config('trypost.platforms.tiktok.api').'/test');
+
+    $exception = TikTokPublishException::fromApiResponse($fakeResponse);
+
+    expect($exception->category)->toBe($category)
+        ->and($exception->platformErrorCode)->toBe($code)
+        ->and($exception->isLimit())->toBe($category === ErrorCategory::RateLimit);
+})->with([
+    'daily post cap' => ['spam_risk_too_many_posts', 403, ErrorCategory::RateLimit],
+    'pending share cap' => ['spam_risk_too_many_pending_share', 403, ErrorCategory::RateLimit],
+    'active user quota' => ['reached_active_user_cap', 403, ErrorCategory::RateLimit],
+    'rate limit' => ['rate_limit_exceeded', 429, ErrorCategory::RateLimit],
+    'banned from posting' => ['spam_risk_user_banned_from_posting', 403, ErrorCategory::ContentPolicy],
+    'invalid param' => ['invalid_param', 400, ErrorCategory::MediaFormat],
+    'unaudited client' => ['unaudited_client_can_only_post_to_private_accounts', 403, ErrorCategory::Permission],
+    'url ownership' => ['url_ownership_unverified', 403, ErrorCategory::Permission],
+    'privacy mismatch' => ['privacy_level_option_mismatch', 403, ErrorCategory::Permission],
+    'app version' => ['app_version_check_failed', 400, ErrorCategory::Permission],
+    'unknown publish id' => ['invalid_publish_id', 400, ErrorCategory::Unknown],
+    'publish id of another token' => ['token_not_authorized_for_specified_publish_id', 400, ErrorCategory::Unknown],
+]);

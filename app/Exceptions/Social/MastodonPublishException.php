@@ -62,12 +62,12 @@ class MastodonPublishException extends SocialPublishException
         }
 
         if ($status === 429) {
-            return new static(
+            return (new static(
                 userMessage: 'Rate limit exceeded. Please try again later.',
                 category: ErrorCategory::RateLimit,
                 platformErrorCode: (string) $status,
                 rawResponse: $rawResponse,
-            );
+            ))->withNetworkReset($response);
         }
 
         if ($status === 503) {

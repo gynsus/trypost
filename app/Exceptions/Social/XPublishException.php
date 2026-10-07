@@ -91,6 +91,15 @@ class XPublishException extends SocialPublishException
             );
         }
 
+        if ($statusCode === 429 && ! in_array($typeSuffix, ['usage-capped', 'rate-limit-exceeded'], true)) {
+            return (new static(
+                userMessage: 'Rate limit exceeded. Please try again later.',
+                category: ErrorCategory::RateLimit,
+                platformErrorCode: (string) $statusCode,
+                rawResponse: $rawResponse,
+            ))->withNetworkReset($response);
+        }
+
         [$message, $category] = match ($typeSuffix) {
             'usage-capped' => ['Usage limit exceeded. Please try again later.', ErrorCategory::RateLimit],
             'rate-limit-exceeded' => ['Rate limit exceeded. Please try again later.', ErrorCategory::RateLimit],
@@ -101,12 +110,12 @@ class XPublishException extends SocialPublishException
             default => [$detail ?: $title ?: 'An unknown X error occurred.', ErrorCategory::Unknown],
         };
 
-        return new static(
+        return (new static(
             userMessage: $message,
             category: $category,
             platformErrorCode: $typeSuffix ?: null,
             rawResponse: $rawResponse,
-        );
+        ))->withNetworkReset($response);
     }
 
     public function platform(): string

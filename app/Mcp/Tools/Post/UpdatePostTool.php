@@ -4,34 +4,39 @@ declare(strict_types=1);
 
 namespace App\Mcp\Tools\Post;
 
+use App\Actions\Post\HostInlineMedia;
 use App\Actions\Post\UpdatePost;
 use App\Enums\Post\Action as PostAction;
+use App\Enums\Post\QueuePosition;
 use App\Enums\Post\Status;
-use App\Enums\PostPlatform\ContentType;
+use App\Exceptions\Post\QueueBusyException;
 use App\Http\Resources\Api\PostResource;
 use App\Mcp\Concerns\AuthorizesMcpTool;
+use App\Mcp\Concerns\DescribesPostMedia;
 use App\Models\Post;
 use App\Models\Workspace;
-use App\Rules\ContentTypeCompatibleWithMedia;
-use App\Rules\ContentTypeMatchesPostPlatform;
 use App\Support\PostPlatformMetaRules;
 use App\Support\PostStatusRules;
+use App\Support\Requests\Post\PostRequestRules;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Validator as ValidatorContract;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
 
-#[Description('Update a draft post — content, media, scheduled_at, labels, and which platforms are enabled. Cannot edit a post that has already been published. Setting status "scheduled" validates the attached media against every enabled content_type (file size, video duration, GIF, MOV — see list-content-types-tool) and fails with a per-platform error when a cap is exceeded; fix the media or switch content_type. Drafts are never blocked.')]
+#[Description('Update one post for its existing social account. Caption, media, content_type, meta (platform settings, merged with the stored ones), status, schedule, queue and labels may change; content_type and meta are top-level fields because a post has exactly one social account, which is fixed. When the acting member needs approval in this workspace, a scheduled, queued or publish-now update is stored with status pending_approval instead.')]
 class UpdatePostTool extends Tool
 {
     use AuthorizesMcpTool;
+    use DescribesPostMedia;
 
     public function handle(Request $request): Response|ResponseFactory
     {
+        $request->validate(['post_id' => ['required', 'uuid']]);
+
         $workspace = $request->user()?->currentWorkspace;
         $post = $workspace instanceof Workspace
             ? Post::where('workspace_id', $workspace->id)->find(data_get($request->all(), 'post_id'))
@@ -41,56 +46,25 @@ class UpdatePostTool extends Tool
             return Response::error('Post not found.');
         }
 
-        if ($denied = $this->denyUnlessCan($request, 'update', $post, 'Not authorized to update this post.')) {
+        if ($denied = $this->denyUnlessCan($request, 'update', $post, 'Post not found.')) {
             return $denied;
         }
 
-        $status = data_get($request->all(), 'status');
+        $input = PostRequestRules::updateInput($post, $request->all());
 
-        $validated = $request->validate(
-            [
-                'post_id' => ['required', 'uuid'],
-                'content' => ['nullable', 'string', 'max:10000'],
-                'scheduled_at' => PostStatusRules::scheduledAtRules($post, $status),
-                'status' => ['sometimes', 'string', Rule::in([Status::Draft->value, Status::Scheduled->value])],
-                'label_ids' => ['sometimes', 'array'],
-                'label_ids.*' => ['uuid', Rule::exists('workspace_labels', 'id')->where('workspace_id', $workspace->id)],
-                'platforms' => ['sometimes', 'array'],
-                'platforms.*.id' => [
-                    'required',
-                    'uuid',
-                    Rule::exists('post_platforms', 'id')->where('post_id', $post->id),
-                ],
-                'platforms.*.content_type' => [
-                    'sometimes',
-                    'string',
-                    Rule::in(array_column(ContentType::cases(), 'value')),
-                    new ContentTypeMatchesPostPlatform,
-                ],
-                ...PostPlatformMetaRules::rules(),
-            ],
-            PostPlatformMetaRules::messages(),
-            PostPlatformMetaRules::attributes(),
-        );
+        $validated = Validator::make($input, PostRequestRules::update($workspace, $post, $input), PostRequestRules::messages(), PostRequestRules::attributes())
+            ->after(fn (ValidatorContract $validator) => PostRequestRules::afterUpdate($validator, $post, $input))
+            ->validate();
 
-        // On schedule, validate each platform's effective content_type (resubmitted
-        // here, or stored) against the post's stored media — the tool can't change
-        // media, so a misconfigured post can't be scheduled even without resubmitting
-        // content_type. Mirrors the public API's withValidator check.
-        if ($status === Status::Scheduled->value) {
-            $errors = ContentTypeCompatibleWithMedia::errorsFor(
-                ContentTypeCompatibleWithMedia::entriesForUpdate($post, data_get($validated, 'platforms')),
-                (array) ($post->media ?? []),
-            );
-
-            if ($errors !== []) {
-                throw ValidationException::withMessages($errors);
-            }
+        if (array_key_exists('media', $validated)) {
+            $validated['media'] = HostInlineMedia::execute($workspace, $post->allowedMediaTypes(), $validated['media']);
         }
 
-        $payload = collect($validated)->except('post_id')->all();
-
-        $result = UpdatePost::execute($workspace, $post, $payload);
+        try {
+            $result = UpdatePost::execute($workspace, $post, $validated, $request->user());
+        } catch (QueueBusyException) {
+            return Response::error(__('posts.errors.queue_busy'));
+        }
 
         if (data_get($result, 'action') === PostAction::Finalized) {
             return Response::error(PostStatusRules::editBlockedMessage());
@@ -108,20 +82,17 @@ class UpdatePostTool extends Tool
         return [
             'post_id' => $schema->string()->required()->description('UUID of the post to update.'),
             'content' => $schema->string()->description('New caption/text body.'),
+            'media' => $this->mediaSchema($schema, 'Replaces the post media; omit to keep the current media.'),
             'scheduled_at' => $schema->string()->description('Future ISO 8601 datetime. Required for status "scheduled" unless the post already has a future schedule.'),
+            'queue' => $schema->string()->enum(array_column(QueuePosition::cases(), 'value'))->description(PostStatusRules::QUEUE_DESCRIPTION),
             'status' => $schema->string()
-                ->enum([Status::Draft->value, Status::Scheduled->value])
-                ->description('Post status. Use "draft" to keep editing, "scheduled" to schedule the post. Use publish-post-tool for immediate publish.'),
+                ->enum([Status::Draft->value, Status::Scheduled->value, Status::Publishing->value])
+                ->description('Post status. Omit it to keep the current one. Use "draft" to keep editing (a scheduled post is unscheduled), "scheduled" to schedule the post at scheduled_at or in the queue, "publishing" to publish it now.'),
             'label_ids' => $schema->array()
                 ->items($schema->string())
                 ->description('Workspace label IDs to attach (replaces existing labels).'),
-            'platforms' => $schema->array()
-                ->items($schema->object(fn ($p) => [
-                    'id' => $p->string()->required()->description('UUID of the post_platform row (from get-post-tool / list-posts-tool).'),
-                    'content_type' => $p->string()->description('New content_type for this platform.'),
-                    'meta' => $p->object()->description('Per-platform metadata override. Instagram/Facebook: aspect_ratio. TikTok: privacy_level PUBLIC_TO_EVERYONE|MUTUAL_FOLLOW_FRIENDS|FOLLOWER_OF_CREATOR|SELF_ONLY (required to publish) + flags. SELF_ONLY cannot be combined with brand_content_toggle. Pinterest: board_id (required to publish — call ListPinterestBoardsTool first), title (≤100), link (destination URL). Pin description comes from the post content. Discord: channel_id (required to publish — call ListDiscordChannelsTool first), mentions, embeds. Merged with existing meta. YouTube Shorts: description (optional plain text, at most 5000 bytes). Post content remains the title source, limited to 100 characters. Omit description to keep the current override; pass null to remove it and use the post content as description.'),
-                ]))
-                ->description('Platforms to enable for publishing. Any platform NOT listed will be disabled. Pass an empty array to disable all.'),
+            'content_type' => $schema->string()->description('New format for the post’s existing social account. Omitted, the stored type is kept, except on pinterest and tiktok, where new media re-decides it as on create (video -> pinterest_video_pin / tiktok_video, several images -> pinterest_carousel, images only -> tiktok_photo).'),
+            'meta' => $schema->object()->description('Settings for the existing account, merged with stored settings. '.PostPlatformMetaRules::documentation()),
         ];
     }
 }

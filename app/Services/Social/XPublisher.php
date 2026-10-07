@@ -12,8 +12,11 @@ use App\Exceptions\Social\XPublishException;
 use App\Models\PostPlatform;
 use App\Services\Media\MediaOptimizer;
 use App\Services\Social\Concerns\HasSocialHttpClient;
+use App\Services\Social\Concerns\PublishesThreads;
+use App\Support\Social\ThreadProgress;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -23,6 +26,7 @@ use Throwable;
 class XPublisher
 {
     use HasSocialHttpClient;
+    use PublishesThreads;
 
     private string $baseUrl;
 
@@ -47,42 +51,79 @@ class XPublisher
 
         $this->accessToken = $account->access_token;
 
+        $rootHash = ThreadProgress::hash((string) $content, $postPlatform->post->mediaItems->map(fn (MediaItem $item): string => $item->id)->all());
+
+        return $this->publishThread(
+            $postPlatform,
+            $rootHash,
+            fn (): array => $this->publishRoot($postPlatform, $content),
+            fn (string $text, Collection $media, array $parent): array => $this->createTweet([
+                ...($text !== '' ? ['text' => $text] : []),
+                ...$this->mediaPayload($media),
+                'reply' => ['in_reply_to_tweet_id' => (string) $parent['id']],
+            ], $account->username),
+        );
+    }
+
+    /**
+     * @return array{id: string, url: ?string}
+     */
+    private function publishRoot(PostPlatform $postPlatform, ?string $content): array
+    {
         $data = [];
 
         if (! empty($content)) {
             $data['text'] = $content;
         }
 
-        $mediaIds = [];
-        $media = $postPlatform->post->mediaItems;
+        $data = [...$data, ...$this->mediaPayload($postPlatform->post->mediaItems)];
 
-        if ($media->isNotEmpty()) {
-            foreach ($media as $mediaItem) {
-                $uploadedMedia = $this->uploadMedia($mediaItem);
-
-                // v2 API returns data.id, v1 returns media_id
-                $mediaId = data_get($uploadedMedia, 'data.id', data_get($uploadedMedia, 'media_id'));
-                if ($mediaId) {
-                    // X expects media_ids as strings in the tweets payload.
-                    $mediaIds[] = (string) $mediaId;
-                    $this->uploadAltText((string) $mediaId, $mediaItem);
-                }
-            }
+        if (data_get($postPlatform->meta, 'is_ai_generated') === true) {
+            $data['made_with_ai'] = true;
         }
 
-        if (! empty($mediaIds)) {
-            $data['media'] = [
-                'media_ids' => $mediaIds,
-            ];
-        }
-
-        if (empty($content) && empty($mediaIds)) {
+        if (empty($content) && ! isset($data['media'])) {
             throw new XPublishException(
                 userMessage: 'X posts require either text or media. Please add content to your post.',
                 category: ErrorCategory::MediaFormat,
             );
         }
 
+        return $this->createTweet($data, $postPlatform->socialAccount->username);
+    }
+
+    /**
+     * Uploads the media and returns the tweet's `media` field, empty when
+     * nothing uploaded.
+     *
+     * @param  Collection<int, MediaItem>  $media
+     * @return array{media?: array{media_ids: list<string>}}
+     */
+    private function mediaPayload(Collection $media): array
+    {
+        $mediaIds = [];
+
+        foreach ($media as $mediaItem) {
+            $uploadedMedia = $this->uploadMedia($mediaItem);
+
+            // v2 API returns data.id, v1 returns media_id
+            $mediaId = data_get($uploadedMedia, 'data.id', data_get($uploadedMedia, 'media_id'));
+            if ($mediaId) {
+                // X expects media_ids as strings in the tweets payload.
+                $mediaIds[] = (string) $mediaId;
+                $this->uploadAltText((string) $mediaId, $mediaItem);
+            }
+        }
+
+        return $mediaIds === [] ? [] : ['media' => ['media_ids' => $mediaIds]];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array{id: string, url: ?string}
+     */
+    private function createTweet(array $data, ?string $username): array
+    {
         $response = $this->getHttpClient()
             ->post("{$this->baseUrl}/tweets", $data);
 
@@ -94,12 +135,11 @@ class XPublisher
             $this->handleApiError($response);
         }
 
-        $responseData = $response->json();
-        $tweetId = $responseData['data']['id'] ?? null;
+        $tweetId = $response->json('data.id');
 
         return [
             'id' => $tweetId ?? 'unknown',
-            'url' => $tweetId ? "https://x.com/{$account->username}/status/{$tweetId}" : null,
+            'url' => $tweetId ? "https://x.com/{$username}/status/{$tweetId}" : null,
         ];
     }
 

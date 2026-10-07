@@ -838,6 +838,10 @@ test('tiktok publisher sends meta settings in video publish request', function (
         $this->api.'/post/publish/status/fetch/' => Http::response([
             'data' => ['status' => 'PUBLISH_COMPLETE'],
         ], 200),
+        $this->api.'/video/list/*' => Http::response([
+            'data' => ['videos' => [], 'has_more' => false],
+            'error' => ['code' => 'ok'],
+        ]),
     ]);
 
     $this->publisher->publish($this->postPlatform);
@@ -984,6 +988,10 @@ test('tiktok publisher uses default settings when only privacy_level is set', fu
         $this->api.'/post/publish/status/fetch/' => Http::response([
             'data' => ['status' => 'PUBLISH_COMPLETE'],
         ], 200),
+        $this->api.'/video/list/*' => Http::response([
+            'data' => ['videos' => [], 'has_more' => false],
+            'error' => ['code' => 'ok'],
+        ]),
     ]);
 
     $this->publisher->publish($this->postPlatform);
@@ -1495,3 +1503,30 @@ test('tiktok publisher keeps links intact', function () {
     Http::assertSent(fn ($request) => str_contains($request->url(), '/video/init/')
         && data_get($request->data(), 'post_info.title') === 'New post: https://acme.com/blog');
 });
+
+test('tiktok video sends the chosen cover frame as video_cover_timestamp_ms', function (?int $coverOffsetMs) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-video',
+            'path' => 'media/2026-01/test-video.mp4',
+            'url' => 'https://example.com/media/2026-01/test-video.mp4',
+            'mime_type' => 'video/mp4',
+            'original_filename' => 'test-video.mp4',
+            'meta' => array_filter(['duration' => 10, 'cover_offset_ms' => $coverOffsetMs], fn (mixed $value): bool => $value !== null),
+        ]],
+    ]);
+
+    Http::fake([
+        "{$this->api}/post/publish/video/init/" => Http::response(['data' => ['publish_id' => 'pub_cover']]),
+        "{$this->api}/post/publish/status/fetch/" => Http::response(['data' => ['status' => 'PUBLISH_COMPLETE', 'publish_id' => 'pub_cover']]),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn ($request): bool => $request->url() === "{$this->api}/post/publish/video/init/"
+        && data_get($request->data(), 'post_info.video_cover_timestamp_ms') === $coverOffsetMs
+        && array_key_exists('video_cover_timestamp_ms', data_get($request->data(), 'post_info')) === ($coverOffsetMs !== null));
+})->with([
+    'offset of 1.5 s' => [1500],
+    'no offset' => [null],
+]);

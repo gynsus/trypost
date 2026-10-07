@@ -23,20 +23,22 @@ class DeletePostTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $validated = $request->validate(['post_id' => ['required', 'string']]);
+        $validated = $request->validate(['post_id' => ['required', 'uuid']]);
 
-        $post = Post::where('workspace_id', $request->user()?->current_workspace_id)
-            ->find(data_get($validated, 'post_id'));
+        $workspace = $request->user()?->currentWorkspace;
+        $post = $workspace
+            ? Post::where('workspace_id', $workspace->id)->find(data_get($validated, 'post_id'))
+            : null;
 
         if (! $post) {
             return Response::error('Post not found.');
         }
 
-        if ($denied = $this->denyUnlessCan($request, 'delete', $post, 'Not authorized to delete this post.')) {
+        if ($denied = $this->denyUnlessCan($request, 'delete', $post, 'Post not found.')) {
             return $denied;
         }
 
-        DeletePost::execute($post);
+        DeletePost::execute($post, respectStatus: true);
 
         return Response::structured(['deleted' => true]);
     }

@@ -43,6 +43,15 @@ class LinkedInPublishException extends SocialPublishException
             );
         }
 
+        if ($statusCode === 429) {
+            return (new static(
+                userMessage: 'LinkedIn rate limit reached. Please try again later.',
+                category: ErrorCategory::RateLimit,
+                platformErrorCode: (string) $statusCode,
+                rawResponse: $rawResponse,
+            ))->withNetworkReset($response);
+        }
+
         [$message, $category] = match ($statusCode) {
             403 => ['Not authorized to post to this account.', ErrorCategory::Permission],
             422 => ['Invalid post data. Please check your content.', ErrorCategory::ContentPolicy],

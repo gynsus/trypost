@@ -30,9 +30,13 @@ class TikTokPublishException extends SocialPublishException
             'scope_permission_missed' => ['Additional permissions required. Please reconnect.', ErrorCategory::Permission],
             'rate_limit_exceeded' => ['TikTok rate limit exceeded. Please try again later.', ErrorCategory::RateLimit],
             'invalid_file_upload' => ['File does not meet API specifications.', ErrorCategory::MediaFormat],
-            'invalid_params' => ['Invalid request parameters.', ErrorCategory::MediaFormat],
+            'invalid_param' => ['Invalid request parameters.', ErrorCategory::MediaFormat],
             'internal_error' => ['TikTok server error. Please try again later.', ErrorCategory::ServerError],
             'reached_active_user_cap' => ['Daily active user quota reached.', ErrorCategory::RateLimit],
+            'spam_risk_too_many_posts' => ['Daily posting limit reached. Try again tomorrow.', ErrorCategory::RateLimit],
+            'spam_risk_too_many_pending_share' => ['Daily upload limit reached. Try again tomorrow.', ErrorCategory::RateLimit],
+            'spam_risk_user_banned_from_posting' => ['Account is banned from posting.', ErrorCategory::ContentPolicy],
+            'invalid_publish_id', 'token_not_authorized_for_specified_publish_id' => ['TikTok no longer recognizes this upload.', ErrorCategory::Unknown],
             'unaudited_client_can_only_post_to_private_accounts' => ['App not approved for public posting.', ErrorCategory::Permission],
             'url_ownership_unverified' => ['Domain ownership not verified.', ErrorCategory::Permission],
             'privacy_level_option_mismatch' => ['Privacy level not available for this account.', ErrorCategory::Permission],
@@ -40,12 +44,12 @@ class TikTokPublishException extends SocialPublishException
             default => [$errorMessage, ErrorCategory::Unknown],
         };
 
-        return new static(
+        return (new static(
             userMessage: $message,
             category: $category,
             platformErrorCode: $errorCode !== null ? (string) $errorCode : null,
             rawResponse: $rawResponse,
-        );
+        ))->withNetworkReset($response);
     }
 
     public static function fromFailReason(string $failReason, ?string $rawResponse = null): static

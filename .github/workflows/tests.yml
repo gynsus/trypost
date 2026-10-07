@@ -85,6 +85,10 @@ jobs:
           REDIS_PORT: ${{ job.services.redis.ports['6379'] }}
         run: php artisan test --compact --parallel
 
+      - name: Show logged warnings of failed tests
+        if: failure()
+        run: grep -h "WARNING\|ERROR" storage/logs/*.log | tail -n 50 || true
+
   backend:
     name: backend
     runs-on: ubuntu-latest

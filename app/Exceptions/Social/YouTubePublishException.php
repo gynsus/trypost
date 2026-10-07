@@ -31,12 +31,12 @@ class YouTubePublishException extends SocialPublishException
             fallbackMessage: $fallbackMessage,
         );
 
-        return new static(
+        return (new static(
             userMessage: $message,
             category: $category,
             platformErrorCode: $reason,
             rawResponse: $rawResponse,
-        );
+        ))->withNetworkReset($response);
     }
 
     public static function fromGoogleException(GoogleServiceException $e): static
@@ -99,6 +99,8 @@ class YouTubePublishException extends SocialPublishException
             'mediaBodyRequired' => ['Video file is missing from the request.', ErrorCategory::MediaFormat],
             'failedPrecondition' => ['Thumbnail too large or account not verified.', ErrorCategory::MediaFormat],
             'uploadLimitExceeded' => ['Daily upload limit reached. Try again tomorrow.', ErrorCategory::RateLimit],
+            'quotaExceeded' => ['YouTube API quota exceeded. Try again later.', ErrorCategory::RateLimit],
+            'rateLimitExceeded', 'userRateLimitExceeded', 'uploadRateLimitExceeded' => ['YouTube rate limit exceeded. Try again later.', ErrorCategory::RateLimit],
             'forbidden' => ["You don't have permission to upload to this channel.", ErrorCategory::Permission],
             'forbiddenLicenseSetting' => ['Invalid video license setting.', ErrorCategory::Permission],
             'forbiddenPrivacySetting' => ['Invalid video privacy setting.', ErrorCategory::Permission],

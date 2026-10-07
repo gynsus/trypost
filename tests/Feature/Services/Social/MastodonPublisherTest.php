@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Models\Workspace;
 use App\Services\Media\MediaOptimizer;
 use App\Services\Social\MastodonPublisher;
+use App\Support\Social\ThreadProgress;
 use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
@@ -579,4 +580,103 @@ test('mastodon publisher keeps links intact', function () {
 
     Http::assertSent(fn ($request) => str_contains($request->url(), '/api/v1/statuses')
         && $request['status'] === 'New post: https://acme.com/blog');
+});
+
+test('mastodon content warning reaches the status payload', function () {
+    $this->postPlatform->update(['meta' => ['spoiler_text' => 'Spoilers for episode 3']]);
+    Http::fake(['https://mastodon.social/api/v1/statuses' => Http::response(['id' => '1', 'url' => 'https://mastodon.social/@t/1'])]);
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn ($request): bool => $request->data() === [
+        'status' => 'Hello from Mastodon!',
+        'visibility' => 'public',
+        'spoiler_text' => 'Spoilers for episode 3',
+    ]);
+});
+
+test('mastodon trims unicode space padding from the content warning like the composer does', function () {
+    $this->postPlatform->update(['meta' => ['spoiler_text' => "\u{3000}\u{200B}Spoilers\u{00A0}"]]);
+    Http::fake(['https://mastodon.social/api/v1/statuses' => Http::response(['id' => '1', 'url' => 'https://mastodon.social/@t/1'])]);
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn ($request): bool => data_get($request->data(), 'spoiler_text') === 'Spoilers');
+});
+
+test('mastodon refuses a post whose content and content warning exceed the limit before any request', function () {
+    $limit = Platform::Mastodon->maxContentLength();
+    $this->post->update(['content' => str_repeat('b', $limit - 9)]);
+    $this->postPlatform->update(['meta' => ['spoiler_text' => str_repeat('a', 10)]]);
+    Http::fake();
+
+    expect(fn () => $this->publisher->publish($this->postPlatform->fresh()))->toThrow(Exception::class, 'limit of');
+
+    Http::assertNothingSent();
+});
+
+test('a mastodon thread chains each reply to the previous one with the root content warning', function () {
+    $this->postPlatform->update(['meta' => ['thread_replies' => ['Two', 'Three'], 'spoiler_text' => 'CW']]);
+    $instance = data_get($this->socialAccount->meta, 'instance');
+    Http::fake(["{$instance}/api/v1/statuses" => Http::sequence()
+        ->push(['id' => '1', 'url' => "{$instance}/@t/1"])
+        ->push(['id' => '2', 'url' => "{$instance}/@t/2"])
+        ->push(['id' => '3', 'url' => "{$instance}/@t/3"])]);
+
+    $result = $this->publisher->publish($this->postPlatform->fresh());
+
+    expect($result)->toBe(['id' => '1', 'url' => "{$instance}/@t/1", 'thread_reply_ids' => ['2', '3']]);
+    Http::assertSent(fn ($request): bool => $request->data() === [
+        'status' => 'Two',
+        'visibility' => 'public',
+        'in_reply_to_id' => '1',
+        'spoiler_text' => 'CW',
+    ]);
+    Http::assertSent(fn ($request): bool => $request->data() === [
+        'status' => 'Three',
+        'visibility' => 'public',
+        'in_reply_to_id' => '2',
+        'spoiler_text' => 'CW',
+    ] && $request->header('Idempotency-Key') === ["{$this->postPlatform->id}:2:".ThreadProgress::hash('Three')]);
+});
+
+test('a mastodon thread attaches each reply media to that reply only', function () {
+    $image = ['id' => 'reply-image', 'path' => 'media/2026-01/photo.jpg', 'url' => 'https://example.com/media/2026-01/photo.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'photo.jpg'];
+    $this->postPlatform->update(['meta' => ['thread_replies' => [['text' => 'Two', 'media' => [$image]], 'Three']]]);
+    $instance = data_get($this->socialAccount->meta, 'instance');
+
+    $mockOptimizer = Mockery::mock(MediaOptimizer::class);
+    $mockOptimizer->shouldReceive('optimizeImage')->andReturnUsing(function (string $tempFile) {
+        $optimized = tempnam(sys_get_temp_dir(), 'masto_opt_');
+        copy($tempFile, $optimized);
+
+        return $optimized;
+    });
+    app()->instance(MediaOptimizer::class, $mockOptimizer);
+
+    Http::fake([
+        'https://example.com/*' => Http::response(file_get_contents(__DIR__.'/../../../fixtures/1x1.png')),
+        "{$instance}/api/v1/media" => Http::response(['id' => 'media-1']),
+        "{$instance}/api/v1/statuses" => Http::sequence()
+            ->push(['id' => '1', 'url' => "{$instance}/@t/1"])
+            ->push(['id' => '2', 'url' => "{$instance}/@t/2"])
+            ->push(['id' => '3', 'url' => "{$instance}/@t/3"]),
+    ]);
+
+    $result = $this->publisher->publish($this->postPlatform->fresh());
+
+    expect($result['thread_reply_ids'])->toBe(['2', '3']);
+    Http::assertSent(fn ($request): bool => str_contains($request->url(), '/statuses') && data_get($request->data(), 'status') === $this->post->content && ! array_key_exists('media_ids', $request->data()));
+    Http::assertSent(fn ($request): bool => $request->data() === ['status' => 'Two', 'visibility' => 'public', 'in_reply_to_id' => '1', 'media_ids' => ['media-1']]
+        && $request->header('Idempotency-Key') === ["{$this->postPlatform->id}:1:".ThreadProgress::hash('Two', ['reply-image'])]);
+    Http::assertSent(fn ($request): bool => $request->data() === ['status' => 'Three', 'visibility' => 'public', 'in_reply_to_id' => '2']);
+});
+
+test('a mastodon thread with a reply over the limit fails before posting anything', function () {
+    $this->postPlatform->update(['meta' => ['thread_replies' => [str_repeat('a', 495)], 'spoiler_text' => 'Ten chars!']]);
+    Http::fake();
+
+    expect(fn () => $this->publisher->publish($this->postPlatform->fresh()))->toThrow(Exception::class);
+
+    Http::assertNothingSent();
 });

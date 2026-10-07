@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Auth;
 
 use App\Enums\SocialAccount\Platform as SocialPlatform;
-use App\Enums\SocialAccount\Status;
-use App\Exceptions\SocialAccount\NetworkAlreadyConnectedException;
-use App\Models\SocialAccount;
 use App\Services\Social\BlueskyLexicon;
+use App\Support\Social\PendingConnection;
+use Exception;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -32,10 +32,11 @@ class BlueskyController extends SocialController
 
         return Inertia::render('accounts/BlueskyConnect', [
             'errors' => session('errors')?->getBag('default')?->toArray() ?? [],
+            'backUrl' => PendingConnection::current()?->returnUrl() ?? PendingConnection::defaultReturnUrl(),
         ]);
     }
 
-    public function store(Request $request): InertiaResponse
+    public function store(Request $request): RedirectResponse
     {
         $this->ensurePlatformEnabled();
 
@@ -63,13 +64,7 @@ class BlueskyController extends SocialController
                     'body' => $response->body(),
                 ]);
 
-                $errorMessage = 'Invalid credentials';
-                $body = $response->json();
-                if (isset($body['message'])) {
-                    $errorMessage = $body['message'];
-                }
-
-                throw ValidationException::withMessages(['password' => $errorMessage]);
+                throw ValidationException::withMessages(['password' => __('accounts.bluesky.invalid_credentials')]);
             }
 
             $data = $response->json();
@@ -82,44 +77,41 @@ class BlueskyController extends SocialController
 
             $profile = $profileResponse->successful() ? $profileResponse->json() : [];
 
-            $avatarPath = data_get($profile, 'avatar') ? uploadFromUrl(data_get($profile, 'avatar')) : null;
-            $reconnect = $this->reconnectAccount($workspace);
+            if (PendingConnection::current()?->platform() !== $this->platform) {
+                $this->rememberConnectSession($request, $workspace);
+            }
 
-            SocialAccount::connectIdentity(
-                $workspace,
-                $this->platform,
-                (string) data_get($data, 'did'),
-                [
-                    'username' => data_get($data, 'handle'),
-                    'display_name' => data_get($profile, 'displayName', data_get($data, 'handle')),
-                    'avatar_url' => $avatarPath,
-                    'access_token' => data_get($data, 'accessJwt'),
-                    'refresh_token' => data_get($data, 'refreshJwt'),
-                    'token_expires_at' => now()->addHours(2),
-                    'status' => Status::Connected,
-                    'error_message' => null,
-                    'disconnected_at' => null,
-                    'meta' => [
-                        'service' => $service,
-                        'identifier' => $request->identifier,
-                        'password' => encrypt($request->password),
+            return $this->offerIdentities($workspace, [
+                PendingConnection::identity(
+                    $this->platform,
+                    (string) data_get($data, 'did'),
+                    data_get($profile, 'displayName') ?: data_get($data, 'handle'),
+                    data_get($data, 'handle'),
+                    data_get($profile, 'avatar'),
+                    $this->platform->identityType()->value,
+                    [
+                        'username' => data_get($data, 'handle'),
+                        'display_name' => data_get($profile, 'displayName', data_get($data, 'handle')),
+                        'access_token' => data_get($data, 'accessJwt'),
+                        'refresh_token' => data_get($data, 'refreshJwt'),
+                        'token_expires_at' => now()->addHours(2),
+                        'meta' => [
+                            'service' => $service,
+                            'identifier' => $request->identifier,
+                            'password' => encrypt($request->password),
+                        ],
                     ],
-                ],
-                $reconnect,
-            );
-
-            return $this->connectedCallback($reconnect);
+                ),
+            ], $this->reconnectAccount($workspace));
         } catch (ValidationException $e) {
             throw $e;
-        } catch (NetworkAlreadyConnectedException $e) {
-            return $this->popupCallback(false, __("accounts.popup_callback.{$e->messageKey}"), $this->platform->value);
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             Log::error('Bluesky connection error', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            throw ValidationException::withMessages(['password' => 'Error connecting to Bluesky. Please try again.']);
+            throw ValidationException::withMessages(['password' => __('accounts.bluesky.connection_error')]);
         }
     }
 }

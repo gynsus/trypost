@@ -21,9 +21,9 @@ beforeEach(fn () => config(['trypost.self_hosted' => false]));
 test('the register screen offers a language picker starting on the negotiated locale', function () {
     $page = visit(route('register'));
 
-    waitForRegisterLanguageTestId($page, 'language-picker');
+    waitForRegisterLanguageTestId($page, 'language-picker-trigger');
 
-    $page->assertVisible('@language-picker')
+    $page->assertVisible('@language-picker-trigger')
         ->assertSee('English')
         ->assertNoJavaScriptErrors();
 });
@@ -31,13 +31,13 @@ test('the register screen offers a language picker starting on the negotiated lo
 test('picking a language translates the register screen without a page load', function () {
     $page = visit(route('register'));
 
-    waitForRegisterLanguageTestId($page, 'language-picker');
+    waitForRegisterLanguageTestId($page, 'language-picker-trigger');
 
-    $page->click('@language-picker');
-    waitForRegisterLanguageTestId($page, 'language-option-pt-BR');
+    $page->click('@language-picker-trigger');
+    waitForRegisterLanguageTestId($page, 'language-picker-option-pt-BR');
 
-    $page->click('@language-option-pt-BR');
-    waitForRegisterLanguageTestId($page, 'language-picker');
+    $page->click('@language-picker-option-pt-BR');
+    waitForRegisterLanguageTestId($page, 'language-picker-trigger');
 
     $page->assertSee('Criar conta')
         ->assertSee('Português')

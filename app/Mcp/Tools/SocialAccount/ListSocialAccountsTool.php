@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace App\Mcp\Tools\SocialAccount;
 
 use App\Http\Resources\Api\SocialAccountResource;
+use App\Mcp\Concerns\AuthorizesMcpTool;
+use App\Models\Workspace;
+use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -13,18 +16,40 @@ use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
 #[IsReadOnly]
-#[Description('List all connected social accounts for the current workspace (LinkedIn, X, Bluesky, Pinterest, Threads, etc.). Each account has an id, platform, display_name, username, is_active flag, and connection status.')]
+#[Description('List the connected social accounts for the current workspace (LinkedIn, X, Bluesky, Pinterest, Threads, etc.). Each account has an id, platform, display_name, username, connection status, and has_posting_schedule (true when the account has posting times, so posts can use queue). Paginated with the app page size: pass page; the response carries total, per_page, current_page and last_page.')]
 class ListSocialAccountsTool extends Tool
 {
-    public function handle(Request $request): ResponseFactory
+    use AuthorizesMcpTool;
+
+    public function handle(Request $request): Response|ResponseFactory
     {
-        $accounts = $request->user()->currentWorkspace
+        $workspace = $this->authorizeCurrentWorkspace($request, 'createPost');
+
+        if (! $workspace instanceof Workspace) {
+            return $workspace;
+        }
+
+        $validated = $request->validate([
+            'page' => ['sometimes', 'integer', 'min:1'],
+        ]);
+
+        $accounts = $workspace
             ->socialAccounts()
-            ->orderBy('platform')
-            ->get();
+            ->paginate((int) config('app.pagination.default'), page: (int) data_get($validated, 'page', 1));
 
         return Response::structured([
-            'social_accounts' => SocialAccountResource::collection($accounts)->resolve(),
+            'social_accounts' => SocialAccountResource::collection($accounts->items())->resolve(),
+            'total' => $accounts->total(),
+            'per_page' => $accounts->perPage(),
+            'current_page' => $accounts->currentPage(),
+            'last_page' => $accounts->lastPage(),
         ]);
+    }
+
+    public function schema(JsonSchema $schema): array
+    {
+        return [
+            'page' => $schema->integer()->description('Page number.'),
+        ];
     }
 }

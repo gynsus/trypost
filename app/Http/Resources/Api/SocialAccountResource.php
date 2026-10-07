@@ -19,8 +19,10 @@ class SocialAccountResource extends JsonResource
             'platform' => $this->platform?->value,
             'display_name' => $this->display_name,
             'username' => $this->username,
-            'is_active' => $this->is_active,
             'status' => $this->status?->value,
+            'has_posting_schedule' => $this->hasPostingSchedule(),
+            'timezone' => $this->timezone,
+            'posting_goal' => $this->posting_goal,
         ];
     }
 }

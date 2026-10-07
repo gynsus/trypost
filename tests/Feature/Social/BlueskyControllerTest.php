@@ -4,18 +4,17 @@ declare(strict_types=1);
 
 use App\Enums\SocialAccount\Platform;
 use App\Enums\SocialAccount\Status;
-use App\Enums\UserWorkspace\Role;
+use App\Enums\User\Locale;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
 use Illuminate\Support\Facades\Http;
-use Inertia\Testing\AssertableInertia;
 
 beforeEach(function () {
     $this->user = User::factory()->create();
     $this->workspace = Workspace::factory()->create(['user_id' => $this->user->id]);
     $this->user->update(['current_workspace_id' => $this->workspace->id]);
-    $this->workspace->members()->attach($this->user->id, ['role' => Role::Member->value]);
+    $this->workspace->members()->attach($this->user->id, membershipPivot('member'));
 });
 
 test('bluesky connect page can be rendered', function () {
@@ -45,9 +44,9 @@ test('user can connect bluesky account with valid credentials', function () {
         'password' => 'xxxx-xxxx-xxxx-xxxx',
     ]);
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page->component('accounts/PopupCallback'));
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+    $response->assertRedirect(route('app.social.connect.show', Platform::Bluesky));
+
+    finishSocialConnect(Platform::Bluesky)->assertRedirect();
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -106,8 +105,8 @@ test('user can connect multiple bluesky accounts', function () {
         'password' => 'xxxx-xxxx-xxxx-xxxx',
     ]);
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+    $response->assertRedirect(route('app.social.connect.show', Platform::Bluesky));
+    finishSocialConnect(Platform::Bluesky)->assertRedirect();
 
     expect($this->workspace->socialAccounts()->where('platform', Platform::Bluesky)->count())->toBe(2);
 });
@@ -131,7 +130,7 @@ test('bluesky store reconnects the original card', function () {
         'status' => Status::TokenExpired,
     ]);
 
-    session(['social_reconnect_id' => $account->id]);
+    startSocialConnect($this->workspace, Platform::Bluesky, $account->id);
 
     $service = config('trypost.platforms.bluesky.default_service');
 
@@ -155,11 +154,9 @@ test('bluesky store reconnects the original card', function () {
             'identifier' => 'testuser.bsky.social',
             'password' => 'xxxx-xxxx-xxxx-xxxx',
         ])
-        ->assertOk()
-        ->assertInertia(fn (AssertableInertia $page) => $page
-            ->where('success', true)
-            ->where('message', __('accounts.popup_callback.reconnected'))
-        );
+        ->assertRedirect(route('app.social.connect.show', Platform::Bluesky));
+
+    finishSocialConnect(Platform::Bluesky)->assertRedirect();
 
     expect($this->workspace->socialAccounts()->count())->toBe(1)
         ->and($account->fresh()->username)->toBe('testuser.bsky.social')
@@ -174,7 +171,7 @@ test('bluesky reconnect that authenticates another handle says so instead of con
         'username' => 'old',
     ]);
 
-    session(['social_reconnect_id' => $account->id]);
+    startSocialConnect($this->workspace, Platform::Bluesky, $account->id);
 
     $service = config('trypost.platforms.bluesky.default_service');
 
@@ -198,12 +195,34 @@ test('bluesky reconnect that authenticates another handle says so instead of con
             'identifier' => 'someone-else.bsky.social',
             'password' => 'xxxx-xxxx-xxxx-xxxx',
         ])
-        ->assertOk()
-        ->assertInertia(fn (AssertableInertia $page) => $page
-            ->where('success', false)
-            ->where('message', __('accounts.popup_callback.wrong_account'))
-        );
+        ->assertRedirect(route('app.social.connect.show', Platform::Bluesky));
+
+    expect(socialConnectFailure())->toBe('wrong_account');
 
     expect($this->workspace->socialAccounts()->count())->toBe(1)
         ->and($account->fresh()->platform_user_id)->toBe('did:plc:testuser123');
+});
+
+test('bluesky connect errors are shown in the user language', function () {
+    $this->user->update(['locale' => Locale::PortugueseBrazil]);
+    Http::fake([
+        'https://bsky.social/xrpc/com.atproto.server.createSession' => Http::response([
+            'error' => 'AuthenticationRequired',
+            'message' => 'Invalid identifier or password',
+        ], 401),
+    ]);
+
+    $this->actingAs($this->user)->post(route('app.social.bluesky.store'), [
+        'identifier' => 'testuser.bsky.social',
+        'password' => 'wrong-password',
+    ])->assertSessionHasErrors(['password' => 'Credenciais inválidas.']);
+
+    Http::fake([
+        'https://bsky.social/xrpc/com.atproto.server.createSession' => fn () => throw new RuntimeException('boom'),
+    ]);
+
+    $this->actingAs($this->user)->post(route('app.social.bluesky.store'), [
+        'identifier' => 'testuser.bsky.social',
+        'password' => 'wrong-password',
+    ])->assertSessionHasErrors(['password' => 'Erro ao conectar ao Bluesky. Tente novamente.']);
 });

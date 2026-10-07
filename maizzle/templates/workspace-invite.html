@@ -13,11 +13,17 @@
                 </h1>
 
                 <p class="m-0 leading-6">
-                  {!! __('mail.workspace_invite.intro', ['account' => '<strong>'.e($accountName).'</strong>']) !!}
+                  {!! __('mail.workspace_invite.intro', ['workspace' => e($workspaceName)]) !!}
                 </p>
 
                 <p class="m-0 mt-4 leading-6">
-                  {!! __('mail.workspace_invite.role', ['role' => '<strong>'.e($roleLabel).'</strong>']) !!}
+                  @if($isAdmin)
+                    {!! __('mail.workspace_invite.role', ['role' => '<strong>'.e(__('mail.workspace_invite.roles.admin')).'</strong>']) !!}
+                  @elseif($requiresApproval)
+                    {!! __('mail.workspace_invite.role', ['role' => '<strong>'.e(__('mail.workspace_invite.roles.needs_approval')).'</strong>']) !!}
+                  @else
+                    {!! __('mail.workspace_invite.role', ['role' => '<strong>'.e(__('mail.workspace_invite.roles.member')).'</strong>']) !!}
+                  @endif
                 </p>
 
                 <x-spacer height="24px" />

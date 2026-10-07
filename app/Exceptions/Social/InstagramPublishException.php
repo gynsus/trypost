@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Exceptions\Social;
 
 use App\Exceptions\TokenExpiredException;
+use App\Services\Social\Meta\GraphError;
 use Illuminate\Http\Client\Response;
 
 class InstagramPublishException extends SocialPublishException
@@ -53,15 +54,17 @@ class InstagramPublishException extends SocialPublishException
             2207042 => ['Daily publishing limit reached. Please try again tomorrow.', ErrorCategory::RateLimit],
             2207050 => ['Instagram account is restricted or inactive. Please check the Instagram app.', ErrorCategory::Permission],
             2207081 => ["This account doesn't support Trial Reels.", ErrorCategory::Permission],
-            default => [$errorUserMsg ?? $errorMessage, ErrorCategory::Unknown],
+            default => in_array($errorCode, GraphError::RATE_LIMIT_CODES, true)
+                ? ['Too many API calls. Please try again later.', ErrorCategory::RateLimit]
+                : [$errorUserMsg ?? $errorMessage, ErrorCategory::Unknown],
         };
 
-        return new static(
+        return (new static(
             userMessage: $message,
             category: $category,
-            platformErrorCode: $errorSubcode !== null ? (string) $errorSubcode : null,
+            platformErrorCode: $errorSubcode !== null ? (string) $errorSubcode : ($category === ErrorCategory::RateLimit && $errorCode !== null ? (string) $errorCode : null),
             rawResponse: $rawResponse,
-        );
+        ))->withNetworkReset($response);
     }
 
     public function platform(): string

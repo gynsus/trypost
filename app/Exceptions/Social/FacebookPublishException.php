@@ -79,19 +79,19 @@ class FacebookPublishException extends SocialPublishException
             1390008 => ['Caption is too long.', ErrorCategory::ContentPolicy],
             1346003 => ['Thumbnail is incompatible.', ErrorCategory::ContentPolicy],
             1349125 => ['Rate limit exceeded. Try again later.', ErrorCategory::RateLimit],
-            4 => ['Too many API calls. Please try again later.', ErrorCategory::RateLimit],
+            4, 32, 341, 613, 80001 => ['Too many API calls. Please try again later.', ErrorCategory::RateLimit],
             17 => ['User call limit reached.', ErrorCategory::RateLimit],
             506 => ['Duplicate post detected. Please modify content.', ErrorCategory::ContentPolicy],
             default => [$errorMessage, ErrorCategory::Unknown],
         };
 
-        return new static(
+        return (new static(
             userMessage: $message,
             category: $category,
             platformErrorCode: $errorCode !== null ? (string) $errorCode : null,
             rawResponse: $rawResponse,
             platformErrorSubcode: $errorSubcode !== null ? (string) $errorSubcode : null,
-        );
+        ))->withNetworkReset($response);
     }
 
     /**

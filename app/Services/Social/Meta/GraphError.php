@@ -54,6 +54,15 @@ class GraphError
     private const TRANSIENT_CODES = [1, 2, 4, 17, 32, 80001, 80002];
 
     /**
+     * Graph codes that say a limit was reached: Platform Rate Limits 4, 17,
+     * 32 and 613 (custom rate limit), 341 (application limit reached), and the
+     * Business Use Case codes 80001 (Pages) and 80002 (Instagram).
+     *
+     * @var list<int>
+     */
+    public const array RATE_LIMIT_CODES = [4, 17, 32, 341, 613, 80001, 80002];
+
+    /**
      * Whether the given Meta Graph error body is a known rate-limit or
      * transient upstream problem, as opposed to a confirmed rejection
      * (dead token, bad request, permission denied, etc.). A body that

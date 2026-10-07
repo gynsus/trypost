@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Actions\Post\DeletePost;
+use App\Enums\Post\Status as PostStatus;
 use App\Events\PostDeleted;
 use App\Models\Post;
 use App\Models\PostPlatform;
@@ -12,6 +13,7 @@ use App\Models\Workspace;
 use App\Support\Social\GoogleBusinessDerivativeCleaner;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 
 test('execute deletes the post', function () {
     $user = User::factory()->create();
@@ -71,4 +73,21 @@ test('execute prunes a google business jpeg still waiting on review', function (
 
     expect(Post::find($post->id))->toBeNull();
     Storage::assertMissing($path);
+});
+
+test('a post claimed for publishing after it was loaded is not deleted', function () {
+    Event::fake([PostDeleted::class]);
+    $user = User::factory()->create();
+    $workspace = Workspace::factory()->create(['user_id' => $user->id]);
+    $post = Post::factory()->scheduled()->create([
+        'workspace_id' => $workspace->id,
+        'user_id' => $user->id,
+    ]);
+
+    Post::query()->whereKey($post->id)->update(['status' => PostStatus::Publishing]);
+
+    expect(fn () => DeletePost::execute($post, respectStatus: true))->toThrow(ValidationException::class);
+
+    expect(Post::query()->find($post->id))->not->toBeNull();
+    Event::assertNotDispatched(PostDeleted::class);
 });

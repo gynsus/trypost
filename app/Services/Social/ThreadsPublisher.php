@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace App\Services\Social;
 
+use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\ThreadsMediaContainerNotFoundException;
 use App\Exceptions\Social\ThreadsPublishException;
 use App\Models\PostPlatform;
 use App\Services\Social\Concerns\HasSocialHttpClient;
+use App\Support\PostPlatformMetaRules;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
@@ -25,6 +27,13 @@ class ThreadsPublisher
     private const int MEDIA_READY_GRACE_SECONDS = 2;
 
     private string $baseUrl;
+
+    /**
+     * Extra parameters for the post's own container (never carousel children).
+     *
+     * @var array<string, string>
+     */
+    private array $containerOptions = [];
 
     public function __construct()
     {
@@ -48,6 +57,17 @@ class ThreadsPublisher
 
         $media = $postPlatform->post->mediaItems;
 
+        if ($postPlatform->content_type === ContentType::ThreadsGhostPost && $media->isNotEmpty()) {
+            throw new ThreadsPublishException(
+                userMessage: __('posts.form.warnings.text_only'),
+                category: ErrorCategory::MediaFormat,
+            );
+        }
+
+        $this->containerOptions = $postPlatform->content_type === ContentType::ThreadsGhostPost
+            ? ['is_ghost_post' => 'true']
+            : $this->postOptions($postPlatform);
+
         // Text only post
         if ($media->isEmpty()) {
             if (empty($content)) {
@@ -57,7 +77,9 @@ class ThreadsPublisher
                 );
             }
 
-            return $this->publishTextPost($userId, $accessToken, $content);
+            return $this->publishMediaWithRetry(
+                fn (): array => $this->publishTextPost($userId, $accessToken, $content),
+            );
         }
 
         $firstMedia = $media->first();
@@ -88,6 +110,7 @@ class ThreadsPublisher
         $containerResponse = $this->socialHttp()->post("{$this->baseUrl}/{$userId}/threads", [
             'media_type' => 'TEXT',
             'text' => $content,
+            ...$this->containerOptions,
             'access_token' => $accessToken,
         ]);
 
@@ -108,7 +131,8 @@ class ThreadsPublisher
             );
         }
 
-        // Step 2: Publish
+        $this->waitForMediaProcessing($containerId, $accessToken);
+
         return $this->publishContainer($userId, $accessToken, $containerId);
     }
 
@@ -119,6 +143,7 @@ class ThreadsPublisher
             'media_type' => 'IMAGE',
             'image_url' => $media->url,
             'text' => $content,
+            ...$this->containerOptions,
             'access_token' => $accessToken,
         ];
 
@@ -161,6 +186,7 @@ class ThreadsPublisher
             'media_type' => 'VIDEO',
             'video_url' => $media->url,
             'text' => $content,
+            ...$this->containerOptions,
             'access_token' => $accessToken,
         ]);
 
@@ -251,6 +277,7 @@ class ThreadsPublisher
             'media_type' => 'CAROUSEL',
             'text' => $content,
             'children' => implode(',', $childContainers),
+            ...$this->containerOptions,
             'access_token' => $accessToken,
         ]);
 
@@ -391,6 +418,16 @@ class ThreadsPublisher
             userMessage: 'Threads took too long to process the media. Please try again.',
             category: ErrorCategory::ServerError,
         );
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function postOptions(PostPlatform $postPlatform): array
+    {
+        $topicTag = PostPlatformMetaRules::threadsTopicTag((string) data_get($postPlatform->meta, 'topic_tag'));
+
+        return $topicTag === '' ? [] : ['topic_tag' => $topicTag];
     }
 
     private function handleApiError(Response $response): never

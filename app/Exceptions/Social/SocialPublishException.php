@@ -5,10 +5,18 @@ declare(strict_types=1);
 namespace App\Exceptions\Social;
 
 use App\Services\Social\TokenRedactor;
+use App\Support\Social\NetworkLimitReset;
+use Carbon\CarbonInterface;
+use Illuminate\Http\Client\Response;
 use RuntimeException;
 
 abstract class SocialPublishException extends RuntimeException
 {
+    /**
+     * When the network said its limit lifts, for a RateLimit refusal.
+     */
+    public ?CarbonInterface $retryAt = null;
+
     public function __construct(
         public readonly string $userMessage,
         public readonly ErrorCategory $category,
@@ -30,6 +38,23 @@ abstract class SocialPublishException extends RuntimeException
             'user_message' => $this->userMessage,
             'raw_response' => TokenRedactor::redact($this->rawResponse),
         ];
+    }
+
+    public function isLimit(): bool
+    {
+        return $this->category === ErrorCategory::RateLimit;
+    }
+
+    /**
+     * Reads the network's reset time from a limit refusal.
+     */
+    public function withNetworkReset(Response $response): static
+    {
+        if ($this->isLimit()) {
+            $this->retryAt = NetworkLimitReset::from($response);
+        }
+
+        return $this;
     }
 
     abstract public static function fromApiResponse(mixed $response): static;

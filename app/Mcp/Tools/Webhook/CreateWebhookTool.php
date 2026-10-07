@@ -8,9 +8,10 @@ use App\Actions\Webhook\CreateWebhook;
 use App\Enums\Webhook\EventType;
 use App\Http\Resources\Api\WebhookResource;
 use App\Mcp\Concerns\AuthorizesMcpTool;
-use App\Mcp\Requests\Webhook\CreateWebhookRequest;
+use App\Models\Webhook;
 use App\Models\Workspace;
 use App\Services\WebhookService;
+use App\Support\Requests\Webhook\WebhookRequestRules;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -28,17 +29,13 @@ class CreateWebhookTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace(
-            $request,
-            'manageWebhooks',
-            'Not authorized to manage webhooks.',
-        );
+        $workspace = $this->authorizeCurrentWorkspace($request, 'create', Webhook::class);
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
         }
 
-        $validated = $request->validate(CreateWebhookRequest::rules());
+        $validated = $request->validate(WebhookRequestRules::store());
 
         try {
             $webhook = CreateWebhook::execute($workspace, $validated, $this->webhooks);

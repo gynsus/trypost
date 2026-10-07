@@ -5,17 +5,13 @@ declare(strict_types=1);
 namespace App\Mcp\Tools\Repurpose;
 
 use App\Actions\Repurpose\UpdateRepurpose;
-use App\Enums\Repurpose\SourceFormat;
 use App\Http\Resources\Api\RepurposeResource;
 use App\Mcp\Concerns\AuthorizesMcpTool;
 use App\Mcp\Concerns\ResolvesWorkspaceRepurpose;
 use App\Mcp\Requests\Repurpose\RepurposeIdRequest;
-use App\Mcp\Requests\Repurpose\UpdateRepurposeRequest;
 use App\Models\Repurpose;
 use App\Models\Workspace;
-use App\Support\Repurpose\DestinationMetaRules;
-use App\Support\Repurpose\SourceIsFree;
-use App\Support\Repurpose\SourceIsNotADestination;
+use App\Support\Requests\Repurpose\RepurposeRequestRules;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -30,7 +26,7 @@ class UpdateRepurposeTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace($request, 'manageRepurposes', 'Not authorized to manage repurposes.');
+        $workspace = $this->currentWorkspace($request);
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
@@ -43,26 +39,11 @@ class UpdateRepurposeTool extends Tool
             return $repurpose;
         }
 
-        $validated = $request->validate(UpdateRepurposeRequest::rules($workspace->id));
-
-        SourceIsFree::assert(
-            $workspace->id,
-            data_get($validated, 'source_social_account_id', $repurpose->source_social_account_id),
-            SourceFormat::from(data_get($validated, 'source_format', $repurpose->source_format->value)),
-            $repurpose->id,
-        );
-
-        SourceIsNotADestination::assert(
-            (array) data_get($validated, 'destinations', []),
-            data_get($validated, 'source_social_account_id', $repurpose->source_social_account_id),
-        );
-
-        if (DestinationMetaRules::enforcedFor($repurpose)) {
-            DestinationMetaRules::assertRequired(
-                (array) data_get($validated, 'destinations', []),
-                $workspace->id,
-            );
+        if ($denied = $this->denyUnlessCan($request, 'update', $repurpose, 'Repurpose not found.')) {
+            return $denied;
         }
+
+        $validated = RepurposeRequestRules::validate($request->all(), $workspace->id, $repurpose);
 
         return Response::structured(
             (new RepurposeResource(UpdateRepurpose::execute($repurpose, $validated)))->resolve(),

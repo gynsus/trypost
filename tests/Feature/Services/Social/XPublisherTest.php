@@ -1289,3 +1289,100 @@ test('x publisher does not count html markup toward the character limit', functi
 
     Http::assertSent(fn ($request) => mb_strlen($request['text']) === 275);
 });
+
+test('an x thread posts each reply under the previous one', function () {
+    $this->postPlatform->update(['meta' => ['thread_replies' => ['Second', 'Third']]]);
+    Http::fake([config('trypost.platforms.x.api').'/tweets' => Http::sequence()
+        ->push(['data' => ['id' => '100']], 201)
+        ->push(['data' => ['id' => '101']], 201)
+        ->push(['data' => ['id' => '102']], 201)]);
+
+    $result = $this->publisher->publish($this->postPlatform->fresh());
+
+    expect($result)->toBe(['id' => '100', 'url' => 'https://x.com/testuser/status/100', 'thread_reply_ids' => ['101', '102']]);
+    Http::assertSent(fn (Request $request): bool => $request->data() === ['text' => 'Second', 'reply' => ['in_reply_to_tweet_id' => '100']]);
+    Http::assertSent(fn (Request $request): bool => $request->data() === ['text' => 'Third', 'reply' => ['in_reply_to_tweet_id' => '101']]);
+});
+
+test('an x thread uploads each reply media with that reply only', function () {
+    $image = ['id' => 'reply-image', 'path' => 'media/2026-01/photo.jpg', 'url' => 'https://example.com/media/2026-01/photo.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'photo.jpg'];
+    $this->postPlatform->update(['meta' => ['thread_replies' => [['text' => '', 'media' => [$image]], ['text' => 'Third', 'media' => []]]]]);
+
+    $mockOptimizer = Mockery::mock(MediaOptimizer::class);
+    $mockOptimizer->shouldReceive('optimizeImage')->andReturnUsing(function (string $tempFile) {
+        $optimized = tempnam(sys_get_temp_dir(), 'x_opt_');
+        copy($tempFile, $optimized);
+
+        return $optimized;
+    });
+    app()->instance(MediaOptimizer::class, $mockOptimizer);
+
+    $tweetIds = ['100', '101', '102'];
+    Http::fake(function (Request $request) use (&$tweetIds) {
+        if (str_contains($request->url(), '/media/upload')) {
+            return Http::response(['data' => ['id' => 'uploaded-1']], 200);
+        }
+
+        if (str_contains($request->url(), '/2/tweets')) {
+            return Http::response(['data' => ['id' => array_shift($tweetIds)]], 201);
+        }
+
+        return Http::response(file_get_contents(__DIR__.'/../../../fixtures/1x1.png'), 200);
+    });
+
+    $result = $this->publisher->publish($this->postPlatform->fresh());
+
+    expect($result['thread_reply_ids'])->toBe(['101', '102']);
+    Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/2/tweets') && $request->data() === ['text' => 'Hello from X!']);
+    Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/2/tweets') && $request->data() === ['media' => ['media_ids' => ['uploaded-1']], 'reply' => ['in_reply_to_tweet_id' => '100']]);
+    Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/2/tweets') && $request->data() === ['text' => 'Third', 'reply' => ['in_reply_to_tweet_id' => '101']]);
+});
+
+test('a retried x thread resumes after the live segments instead of re-posting the root', function () {
+    $this->postPlatform->update(['meta' => ['thread_replies' => ['Second']]]);
+    Http::fake([config('trypost.platforms.x.api').'/tweets' => Http::sequence()
+        ->push(['data' => ['id' => '100']], 201)
+        ->push(['title' => 'Forbidden', 'detail' => 'Not allowed', 'status' => 403], 403)
+        ->push(['data' => ['id' => '101']], 201)]);
+
+    rescue(fn () => $this->publisher->publish($this->postPlatform->fresh()), report: false);
+    $result = (new XPublisher)->publish($this->postPlatform->fresh());
+
+    expect($result['id'])->toBe('100')
+        ->and($result['thread_reply_ids'])->toBe(['101']);
+    Http::assertSentCount(3);
+});
+
+test('an x reply over the account limit is rejected before anything is posted', function () {
+    $this->postPlatform->update(['meta' => ['thread_replies' => [str_repeat('a', 281)]]]);
+    Http::fake();
+
+    expect(fn () => $this->publisher->publish($this->postPlatform->fresh()))->toThrow(Exception::class);
+    Http::assertNothingSent();
+});
+
+test('an x account with long posts may thread replies past 280 characters', function () {
+    $this->socialAccount->update(['meta' => [...(array) $this->socialAccount->meta, 'x_subscription_type' => 'Premium']]);
+    $this->postPlatform->update(['meta' => ['thread_replies' => [str_repeat('a', 400)]]]);
+    Http::fake([config('trypost.platforms.x.api').'/tweets' => Http::sequence()
+        ->push(['data' => ['id' => '100']], 201)
+        ->push(['data' => ['id' => '101']], 201)]);
+
+    $result = $this->publisher->publish($this->postPlatform->fresh());
+
+    expect($result['thread_reply_ids'])->toBe(['101']);
+});
+
+test('an x post marked as ai generated discloses it with made_with_ai', function (mixed $flag, bool $sent) {
+    $this->postPlatform->update(['meta' => ['is_ai_generated' => $flag]]);
+    Http::fake([config('trypost.platforms.x.api').'/tweets' => Http::response(['data' => ['id' => '100']], 201)]);
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/tweets')
+        && array_key_exists('made_with_ai', $request->data()) === $sent
+        && (! $sent || $request->data()['made_with_ai'] === true));
+})->with([
+    'marked' => [true, true],
+    'not marked' => [false, false],
+]);

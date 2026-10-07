@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 use App\Enums\User\Goal;
+use App\Enums\User\Locale;
 use App\Enums\User\Persona;
 use App\Enums\User\ReferralSource;
-use App\Enums\UserWorkspace\Role;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
@@ -26,6 +26,8 @@ function waitForWelcomePlanTestId(mixed $page, string $testId): void
             }
         })();
     JS);
+
+    waitForWebFonts($page);
 }
 
 function welcomeOwnerOnPlanStep(): User
@@ -41,7 +43,7 @@ function welcomeOwnerOnPlanStep(): User
         'account_id' => $user->account_id,
         'user_id' => $user->id,
     ]);
-    $workspace->members()->attach($user->id, ['role' => Role::Admin->value]);
+    $workspace->members()->attach($user->id, membershipPivot('admin'));
     $user->update(['current_workspace_id' => $workspace->id]);
 
     SocialAccount::factory()->linkedin()->create([
@@ -62,7 +64,7 @@ test('the plan step shows both plans with networks and no yearly toggle', functi
     waitForWelcomePlanTestId($page, 'plan-card-socials');
     waitForWelcomePlanTestId($page, 'plan-card-workspaces');
     waitForWelcomePlanTestId($page, 'plan-price-first-month-socials');
-    waitForWelcomePlanTestId($page, 'language-picker');
+    waitForWelcomePlanTestId($page, 'welcome-language-trigger');
 
     $page->assertRoute('app.welcome.plan')
         ->assertVisible('@plan-card-socials')
@@ -87,8 +89,53 @@ test('the plan step shows both plans with networks and no yearly toggle', functi
         ->assertVisible('@plan-select-workspaces')
         ->assertVisible('@plan-highlight-socials')
         ->assertVisible('@plan-highlight-workspaces')
-        ->assertVisible('@language-picker')
+        ->assertVisible('@welcome-language-trigger')
+        ->assertVisible('@theme-toggle')
         ->assertMissing('@plan-interval-yearly')
         ->assertMissing('@plan-interval-monthly')
         ->assertNoJavaScriptErrors();
+});
+
+test('every plan feature fits on one line in every language', function () {
+    config(['trypost.self_hosted' => false]);
+
+    $this->actingAs(welcomeOwnerOnPlanStep());
+
+    $page = visit(route('app.welcome.plan'))->resize(1280, 900);
+    waitForWelcomePlanTestId($page, 'plan-feature-label-socials-team');
+
+    $keys = ['networks_all', 'accounts_unlimited', 'calendar', 'ai', 'mcp', 'repurpose', 'analytics', 'team'];
+
+    $translations = collect($keys)
+        ->mapWithKeys(fn (string $key): array => [$key => collect(Locale::cases())
+            ->mapWithKeys(fn (Locale $locale): array => [$locale->value => __("billing.plans.features.{$key}", [], $locale->value)])
+            ->all()])
+        ->all();
+
+    $json = json_encode($translations, JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT);
+
+    $wrapped = $page->script(<<<JS
+        (() => {
+            const translations = {$json};
+            const wrapped = [];
+            for (const [key, texts] of Object.entries(translations)) {
+                const label = document.querySelector('[data-testid="plan-feature-label-socials-' + key + '"]');
+                const wrapper = label.parentElement;
+                const available = wrapper.parentElement.getBoundingClientRect().width - 24;
+                const siblings = [...wrapper.children]
+                    .filter((child) => child !== label)
+                    .reduce((total, child) => total + child.getBoundingClientRect().width + 6, 0);
+                label.style.whiteSpace = 'nowrap';
+                for (const [locale, text] of Object.entries(texts)) {
+                    label.textContent = text;
+                    if ((label.getBoundingClientRect().width + siblings) * 1.04 > available) {
+                        wrapped.push(locale + ': ' + key + ' — ' + text);
+                    }
+                }
+            }
+            return wrapped;
+        })()
+    JS);
+
+    expect($wrapped)->toBe([]);
 });

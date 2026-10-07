@@ -16,6 +16,7 @@ use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\SocialPublishException;
 use App\Exceptions\TokenExpiredException;
 use App\Models\PostPlatform;
+use App\Rules\ContentTypeCompatibleWithMedia;
 use App\Services\Social\BlueskyPublisher;
 use App\Services\Social\ConnectionVerifier;
 use App\Services\Social\Discord\DiscordPublisher;
@@ -32,11 +33,16 @@ use App\Services\Social\TikTokPublisher;
 use App\Services\Social\XPublisher;
 use App\Services\Social\YouTubePublisher;
 use App\Support\Social\GoogleBusinessDerivativeCleaner;
+use App\Support\Social\LimitRetryPolicy;
+use App\Support\Social\PublishCheckpoint;
+use App\Support\Social\ThreadProgress;
 use App\Support\Social\TikTokPhotoDerivativeCleaner;
+use App\Support\ThreadReplies;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -86,13 +92,7 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
     {
         $this->postPlatform->refresh();
 
-        if ($this->postPlatform->status->isClosed()) {
-            return;
-        }
-
-        if (! $this->postPlatform->socialAccount->is_active) {
-            $this->failAndFinalize(__('posts.errors.account_inactive'));
-
+        if ($this->postPlatform->status->isClosed() || $this->postPlatform->isWaitingForLimitRetry()) {
             return;
         }
 
@@ -112,6 +112,10 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
         }
 
         if ($this->failForMissingScopes()) {
+            return;
+        }
+
+        if ($this->failForInvalidMedia()) {
             return;
         }
 
@@ -152,6 +156,10 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
                 $this->failWithExpiredToken($e);
                 break;
             } catch (SocialPublishException $e) {
+                if ($e->isLimit() && $this->waitForLimitRetry($e)) {
+                    break;
+                }
+
                 $this->reportCaughtPublishFailure($e);
                 $this->markPlatformAsFailed($e->userMessage, $this->failureContext([
                     'category' => $e->category->value,
@@ -187,6 +195,11 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
         // tryFrom, not fromApi: every other publisher omits `state`. fromApi(null)
         // is Processing, which would hold LinkedIn/X/… in pending review forever.
         $state = LocalPostState::tryFrom((string) data_get($result, 'state'));
+        $threadReplyIds = data_get($result, 'thread_reply_ids');
+
+        if (is_array($threadReplyIds) && $threadReplyIds !== []) {
+            $this->postPlatform->thread_reply_ids = array_values($threadReplyIds);
+        }
 
         match ($state) {
             LocalPostState::Rejected => $this->postPlatform->markAsRejected(
@@ -228,6 +241,49 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
                 'failed_at' => now()->toIso8601String(),
             ],
         );
+
+        return true;
+    }
+
+    /**
+     * Media can become invalid after scheduling (bounds changed in a release,
+     * an edit through another path): recheck it against the same rule every
+     * save runs, and fail without calling the network. A resume of a publish
+     * already accepted by the provider (Instagram container, TikTok publish id)
+     * is not rechecked: its media is already on the network. Neither is a
+     * target scheduled before TryPost 2.0 (`scheduled_before_media_checks`),
+     * which publishes its media as the pre-2.0 publishers did.
+     */
+    private function failForInvalidMedia(): bool
+    {
+        $context = $this->postPlatform->error_context;
+
+        if ($this->postPlatform->scheduled_before_media_checks) {
+            return false;
+        }
+
+        if (PublishCheckpoint::instagramWorkflow($context) !== null || PublishCheckpoint::tiktokPublishId($context) !== null) {
+            return false;
+        }
+
+        $post = $this->postPlatform->post;
+        $errors = ContentTypeCompatibleWithMedia::errorsFor(
+            [[
+                'key' => 'media',
+                'content_type' => $this->postPlatform->content_type?->value,
+            ]],
+            (array) ($post->media ?? []),
+            $post->workspace,
+        ) ?: ThreadReplies::mediaErrors($this->postPlatform->platform, $this->postPlatform->meta, $post->workspace);
+
+        if ($errors === []) {
+            return false;
+        }
+
+        $this->failAndFinalize((string) array_first($errors), $this->failureContext([
+            'reason' => 'media_invalid',
+            'category' => ErrorCategory::MediaFormat->value,
+        ]));
 
         return true;
     }
@@ -286,6 +342,55 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
         ]);
 
         self::dispatch($this->postPlatform, $retryCount)->delay($nextAttemptAt);
+    }
+
+    /**
+     * A limit refusal (rate limit, posting quota, daily cap) is not a failure
+     * yet: the target waits in Retrying until `retry_at`, when
+     * ProcessScheduledPosts dispatches it again. A refused TikTok publish_id
+     * is dead, so it is dropped; thread checkpoints stay so the retry resumes.
+     * Returns false once the retries are spent.
+     */
+    private function waitForLimitRetry(SocialPublishException $e): bool
+    {
+        $previousContext = $this->postPlatform->error_context ?? [];
+        $retries = LimitRetryPolicy::retriesSoFar($previousContext);
+        $retryAt = LimitRetryPolicy::nextAttemptAt($retries, $e->retryAt);
+
+        if ($retryAt === null) {
+            return false;
+        }
+
+        match ($this->postPlatform->platform) {
+            SocialPlatform::TikTok => app(TikTokPhotoDerivativeCleaner::class)->cleanup($previousContext, $this->postPlatform->id),
+            SocialPlatform::GoogleBusiness => app(GoogleBusinessDerivativeCleaner::class)->cleanup($this->postPlatform->id),
+            default => null,
+        };
+
+        $context = [
+            ...Arr::except($previousContext, [
+                PublishCheckpoint::TIKTOK_PUBLISH_ID,
+                PublishCheckpoint::TIKTOK_STATUS,
+                PublishCheckpoint::TIKTOK_DERIVATIVE_PATHS,
+            ]),
+            'category' => ErrorCategory::RateLimit->value,
+            'platform_error_code' => $e->platformErrorCode,
+            'raw_response' => data_get($e->context(), 'raw_response'),
+            LimitRetryPolicy::ATTEMPTS_KEY => $retries + 1,
+            'last_attempt_at' => now()->toIso8601String(),
+        ];
+
+        Log::warning('Publish waiting for a network limit', [
+            'post_platform_id' => $this->postPlatform->id,
+            'platform' => $this->postPlatform->platform->value,
+            'platform_error_code' => $e->platformErrorCode,
+            'limit_retries' => $retries + 1,
+            'retry_at' => $retryAt->toIso8601String(),
+        ]);
+
+        $this->postPlatform->markAsWaitingForLimitRetry($retryAt, $e->userMessage, $context);
+
+        return true;
     }
 
     /**
@@ -373,7 +478,10 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
 
         $failureContext = [...$previousContext, ...($context ?? [])];
 
-        $this->postPlatform->markAsFailed($message, $failureContext === [] ? null : $failureContext);
+        $this->postPlatform->markAsFailed(
+            ThreadProgress::failureMessage($this->postPlatform, $message, $failureContext),
+            $failureContext === [] ? null : $failureContext,
+        );
     }
 
     /**
@@ -451,7 +559,7 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
 
         $this->postPlatform->refresh();
 
-        if ($this->postPlatform->status->isClosed()) {
+        if ($this->postPlatform->status->isClosed() || $this->postPlatform->isWaitingForLimitRetry()) {
             return;
         }
 
