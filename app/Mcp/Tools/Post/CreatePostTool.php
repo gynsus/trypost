@@ -27,7 +27,7 @@ use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
 
-#[Description('Create one post for one social account in the current workspace: a draft, a post scheduled at a custom time, a post queued in the channel\'s next free slot (queue: next) or first slot (queue: top), a queue post in one specific free slot (queue_slot, an instant from list-free-slots-tool), or a post published now. When the acting member needs approval in this workspace, a scheduled, queued or publish-now post is stored with status pending_approval instead and waits for approve-post-tool. Use create-posts-tool to create a batch. Use list-content-types-tool to discover valid content_types.')]
+#[Description('Create one post for one social account in the current workspace: a draft, a post scheduled at a custom time, a post queued in the channel\'s next free slot (queue: next) or first slot (queue: top), a queue post in one specific free slot (queue_slot, an instant from list-free-slots-tool), or a post published now. When the acting member needs approval in this workspace, a scheduled, queued or publish-now post is stored with status pending_approval instead and waits for approve-post-tool. Use create-posts-tool to create a batch. Use list-content-types-tool to discover valid content_types. To publish a thread on X, Bluesky or Mastodon, put the follow-up posts in meta.thread_replies: up to 24 replies published under the post, each {text, media} with up to 4 media items given by url, id or upload_token, e.g. [{"text": "2/ ..."}, {"text": "3/ ...", "media": [{"url": "https://..."}]}]. Each reply must fit the text limit of the account and follows the media rules of a post on that network. Before a post can be scheduled or published it needs: TikTok meta.privacy_level (get-tiktok-creator-info-tool), Pinterest meta.board_id (list-pinterest-boards-tool), Discord meta.channel_id (list-discord-channels-tool), Google Business events and offers meta.event (title and dates), YouTube a title (meta.title, or the first line of the text); list-content-types-tool lists them per platform as required_meta. A scheduled or published post also needs text or media.')]
 class CreatePostTool extends Tool
 {
     use AuthorizesMcpTool;
@@ -51,11 +51,13 @@ class CreatePostTool extends Tool
             ->map(fn (SocialAccount $account): Platform => $account->platform)
             ->values();
 
+        $validated = HostInlineMedia::forPost($workspace, Post::allowedMediaTypesFor($platforms), $validated);
+
         try {
             $post = CreatePosts::execute($workspace, $request->user(), [
                 'status' => $validated['status'] ?? Status::Draft->value,
                 'content' => $validated['content'] ?? '',
-                'media' => HostInlineMedia::execute($workspace, Post::allowedMediaTypesFor($platforms), $validated['media'] ?? []),
+                'media' => $validated['media'] ?? [],
                 'scheduled_at' => $validated['scheduled_at'] ?? $validated['queue_slot'] ?? null,
                 'queue' => $validated['queue'] ?? null,
                 'queue_slot' => $validated['queue_slot'] ?? null,
@@ -75,12 +77,12 @@ class CreatePostTool extends Tool
     public function schema(JsonSchema $schema): array
     {
         return [
-            'content' => $schema->string()->description('The post caption/text body. Optional — can be edited later.'),
+            'content' => $schema->string()->description('The post text, in plain text; use \n for line breaks. When link defusing is on, an X post publishes its links non-clickable (example(.)com); preview-post-tool shows the exact text each network gets. The text must fit the account limit (max_content_length in list-social-accounts-tool; on X, 25000 for an account with long_posts, else 280), Instagram takes at most 5 hashtags, and stories publish no text.'),
             'media' => $this->mediaSchema($schema, 'Media for the post.'),
             'status' => $schema->string()
                 ->enum([Status::Draft->value, Status::Scheduled->value, Status::Publishing->value])
                 ->description('draft (default) keeps the post editable, scheduled schedules it at scheduled_at or in the queue, publishing publishes it now.'),
-            'scheduled_at' => $schema->string()->description('ISO 8601 datetime in the future (e.g. 2026-05-10T15:30:00Z), required when status is scheduled without queue.'),
+            'scheduled_at' => $schema->string()->description('ISO 8601 datetime in the future and before 2038-01-19, e.g. 2026-05-10T15:30:00Z; without an offset it is read as UTC. Times in responses are UTC (Y-m-d H:i:s). Required when status is scheduled without queue or queue_slot.'),
             'queue' => $schema->string()->enum(array_column(QueuePosition::cases(), 'value'))->description(PostStatusRules::QUEUE_DESCRIPTION),
             'queue_slot' => $schema->string()->description(PostStatusRules::QUEUE_SLOT_DESCRIPTION),
             'label_ids' => $schema->array()

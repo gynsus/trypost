@@ -23,8 +23,16 @@ class ContentSanitizer
      */
     private const LINK_PATTERN = '~(^|[^\p{L}\p{N}\p{M}_@/.])((?:https?://(?:[^\s/@]+@)?)?(?:www\.)?)((?:[\p{L}\p{N}](?:[\p{L}\p{N}\p{M}-]*[\p{L}\p{N}\p{M}])?\.)+([\p{L}\p{N}\p{M}-]{2,63}))(?![\p{L}\p{N}\p{M}-])((?:/\S*)?)~iu';
 
+    private const TAG_BODY = '/?[a-z][^<>]*>';
+
+    private const TAG_PATTERN = '~<'.self::TAG_BODY.'~i';
+
+    private const TYPED_BRACKET_PATTERN = '~<(?!'.self::TAG_BODY.')~i';
+
     public function sanitize(string $content, Platform $platform): string
     {
+        $content = $this->escapeTypedBrackets($content);
+
         return match ($platform) {
             Platform::LinkedIn, Platform::LinkedInPage => $this->convertBoldAndStrip($content),
             Platform::Mastodon => $this->stripUnsafeHtml($content),
@@ -53,7 +61,7 @@ class ContentSanitizer
 
         return match ($platform) {
             Platform::Telegram => html_entity_decode(strip_tags($sanitized), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
-            Platform::Mastodon => strip_tags($sanitized),
+            Platform::Mastodon => preg_replace(self::TAG_PATTERN, '', $sanitized) ?? $sanitized,
             default => $sanitized,
         };
     }
@@ -63,7 +71,18 @@ class ContentSanitizer
      */
     public function plainText(string $content): string
     {
-        return $this->stripHtml($content);
+        return $this->stripHtml($this->escapeTypedBrackets($content));
+    }
+
+    /**
+     * The composer stores plain text, so a `<` that does not open a tag is
+     * something the person typed (`I <3 TryPost`, `price < 10`). It becomes
+     * `&lt;`, or stripping tags would drop everything after it. Tags, from the
+     * former rich editor in older posts or typed, are still removed.
+     */
+    private function escapeTypedBrackets(string $content): string
+    {
+        return preg_replace(self::TYPED_BRACKET_PATTERN, '&lt;', $content) ?? $content;
     }
 
     /**
@@ -106,12 +125,7 @@ class ContentSanitizer
      */
     private function toTelegramHtml(string $content): string
     {
-        // Block elements → newlines (Telegram HTML has no <p>/<br>/<li>).
-        $content = preg_replace('/<p[^>]*>/i', '', $content);
-        $content = str_replace('</p>', "\n", $content);
-        $content = preg_replace('/<br\s*\/?>/i', "\n", $content);
-        $content = preg_replace('/<li[^>]*>/i', '- ', $content);
-        $content = str_replace('</li>', "\n", $content);
+        $content = $this->blocksToLines($content);
 
         // Normalize to Telegram's tag names, then keep only its allowlist.
         $content = preg_replace(['/<(\/?)strong>/i', '/<(\/?)em>/i'], ['<$1b>', '<$1i>'], $content);
@@ -130,16 +144,7 @@ class ContentSanitizer
 
     private function stripHtml(string $content): string
     {
-        // Convert <p> tags to newlines
-        $content = preg_replace('/<p[^>]*>/i', '', $content);
-        $content = str_replace('</p>', "\n", $content);
-
-        // Convert <br> to newlines
-        $content = preg_replace('/<br\s*\/?>/i', "\n", $content);
-
-        // Convert list items to dash prefix
-        $content = preg_replace('/<li[^>]*>/i', '- ', $content);
-        $content = str_replace('</li>', "\n", $content);
+        $content = $this->blocksToLines($content);
 
         // Strip remaining HTML tags
         $content = strip_tags($content);
@@ -151,6 +156,19 @@ class ContentSanitizer
         $content = preg_replace("/\n{3,}/", "\n\n", $content);
 
         return trim($content);
+    }
+
+    /**
+     * Block markup of older rich-editor posts as line breaks: a paragraph,
+     * heading, quote or line break ends a line and a list item starts with a dash.
+     */
+    private function blocksToLines(string $content): string
+    {
+        return (string) preg_replace(
+            ['~<p\b[^>]*>~i', '~<li\b[^>]*>~i', '~<br\s*/?>|</(?:p|li|div|h[1-6]|blockquote)>~i'],
+            ['', '- ', "\n"],
+            $content,
+        );
     }
 
     private function stripUnsafeHtml(string $content): string
