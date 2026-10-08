@@ -831,6 +831,22 @@ return [
         'publishing_timed_out' => 'La publication a expiré. Veuillez réessayer.',
         'rejected_in_review' => 'Google a refusé ce post lors de l\'examen. Modifie le contenu ou l\'image et réessaie.',
         'review_unconfirmed' => 'Google n\'a jamais confirmé ce post. Vérifie ta fiche d\'établissement et réessaie.',
+        'instagram' => [
+            'processing_failed' => 'Instagram n\'a pas pu traiter ce média. Essaie un autre fichier.',
+        ],
+        'content_too_long' => 'Cette publication contient :provided caractères, mais :platform en autorise :max.',
+        'unrecognized_error' => ':platform a renvoyé une erreur que nous n\'avons pas pu identifier. Réessaie.',
+        'media_unavailable' => 'Nous n\'avons pas pu récupérer le média à envoyer à :platform. Réessaie.',
+        'facebook' => [
+            'processing_failed' => 'Facebook n\'a pas pu traiter cette vidéo. Vérifie qu\'elle respecte les exigences des Reels et réessaie.',
+            'upload_incomplete' => 'Facebook n\'a pas reçu la vidéo en entier. Réessaie.',
+        ],
+        'linkedin' => [
+            'server_error' => 'LinkedIn a rencontré une erreur serveur. Réessaie.',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'YouTube a échoué en finalisant l\'envoi. Vérifie ta chaîne avant de réessayer : la vidéo y est peut-être déjà.',
+        ],
         'google_business' => [
             'no_location' => 'Ce compte Google Business Profile n\'a aucun établissement configuré. Reconnecte-le.',
             'permission_denied' => 'Autorisation refusée. Reconnecte le compte et confirme l\'accès à cet établissement.',

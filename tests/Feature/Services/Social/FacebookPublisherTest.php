@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
 use App\Exceptions\PlatformUnavailableException;
+use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\FacebookPublishException;
 use App\Exceptions\TokenExpiredException;
 use App\Models\Post;
@@ -438,6 +439,55 @@ test('facebook publisher waits for meta to fetch the video before finishing', fu
         Sleep::for(5)->seconds(),
     ]);
 })->with('facebook resumable video formats');
+
+test('facebook publisher retries a rupload failure meta documents as retryable', function (int $status, array $body) {
+    $this->postPlatform->update(['content_type' => ContentType::FacebookReel]);
+    $this->post->update(['media' => facebookVideoMedia()]);
+
+    $rupload = 'https://'.config('trypost.platforms.facebook.rupload_host');
+
+    Http::fake([
+        ...facebookVideoUploadFakes('video_reels'),
+        "{$rupload}/*" => Http::response($body, $status),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(PlatformUnavailableException::class);
+
+    Http::assertNotSent(fn ($request) => ($request['upload_phase'] ?? null) === 'finish');
+})->with([
+    'retriable flag' => [400, ['debug_info' => ['retriable' => true, 'type' => 'OtherError', 'message' => 'Temporary failure']]],
+    'server error' => [503, ['debug_info' => ['retriable' => false, 'type' => 'ServiceUnavailable', 'message' => 'Service unavailable']]],
+]);
+
+test('facebook publisher fails a rupload error meta flags not retriable by its documented type', function (string $type, string $message, ErrorCategory $category) {
+    $this->postPlatform->update(['content_type' => ContentType::FacebookReel]);
+    $this->post->update(['media' => facebookVideoMedia()]);
+
+    $rupload = 'https://'.config('trypost.platforms.facebook.rupload_host');
+
+    Http::fake([
+        ...facebookVideoUploadFakes('video_reels'),
+        "{$rupload}/*" => Http::response(['debug_info' => [
+            'retriable' => false,
+            'type' => $type,
+            'message' => 'The video file could not be read from file_url.',
+        ]], 400),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(fn (FacebookPublishException $exception) => expect($exception->userMessage)
+            ->toBe(__($message, ['platform' => Platform::Facebook->label()]))
+            ->and($exception->category)->toBe($category)
+            ->and($exception->platformErrorCode)->toBe($type));
+
+    Http::assertNotSent(fn ($request) => ($request['upload_phase'] ?? null) === 'finish');
+})->with([
+    'processing failed' => ['ProcessingFailedError', 'posts.errors.facebook.processing_failed', ErrorCategory::MediaFormat],
+    'partial request' => ['PartialRequestError', 'posts.errors.facebook.upload_incomplete', ErrorCategory::ServerError],
+    'invalid upload offset' => ['OffsetInvalidError', 'posts.errors.facebook.upload_incomplete', ErrorCategory::ServerError],
+    'undocumented type' => ['InvalidFileError', 'posts.errors.unrecognized_error', ErrorCategory::Unknown],
+]);
 
 test('facebook publisher fails when start does not return upload_url', function (ContentType $contentType, string $edge) {
     $this->postPlatform->update(['content_type' => $contentType]);

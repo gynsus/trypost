@@ -831,6 +831,22 @@ return [
         'publishing_timed_out' => 'Publiceren is timed-out. Probeer het opnieuw.',
         'rejected_in_review' => 'Google heeft dit bericht bij de beoordeling afgewezen. Pas de inhoud of afbeelding aan en probeer het opnieuw.',
         'review_unconfirmed' => 'Google heeft dit bericht nooit bevestigd. Controleer je bedrijfsprofiel en probeer het opnieuw.',
+        'instagram' => [
+            'processing_failed' => 'Instagram kon dit bestand niet verwerken. Probeer een ander bestand.',
+        ],
+        'content_too_long' => 'Deze post heeft :provided tekens, maar :platform staat er :max toe.',
+        'unrecognized_error' => ':platform gaf een fout die we niet konden herkennen. Probeer het opnieuw.',
+        'media_unavailable' => 'We konden de media voor :platform niet ophalen. Probeer het opnieuw.',
+        'facebook' => [
+            'processing_failed' => 'Facebook kon deze video niet verwerken. Controleer of hij aan de eisen voor Reels voldoet en probeer het opnieuw.',
+            'upload_incomplete' => 'Facebook heeft niet de hele video ontvangen. Probeer het opnieuw.',
+        ],
+        'linkedin' => [
+            'server_error' => 'LinkedIn had een serverfout. Probeer het opnieuw.',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'YouTube faalde bij het afronden van de upload. Controleer je kanaal voordat je het opnieuw probeert: de video staat er misschien al.',
+        ],
         'google_business' => [
             'no_location' => 'Dit Google Business Profile-account heeft geen locatie ingesteld. Verbind het opnieuw.',
             'permission_denied' => 'Toegang geweigerd. Verbind opnieuw en bevestig toegang tot deze locatie.',

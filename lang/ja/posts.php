@@ -831,6 +831,22 @@ return [
         'publishing_timed_out' => '公開がタイムアウトしました。もう一度お試しください。',
         'rejected_in_review' => 'Google の審査でこの投稿が拒否されました。本文または画像を修正して、もう一度お試しください。',
         'review_unconfirmed' => 'Google からこの投稿の結果が返りませんでした。ビジネス プロフィールを確認して、もう一度お試しください。',
+        'instagram' => [
+            'processing_failed' => 'Instagram でこのメディアを処理できませんでした。別のファイルをお試しください。',
+        ],
+        'content_too_long' => 'この投稿は :provided 文字ですが、:platform の上限は :max 文字です。',
+        'unrecognized_error' => ':platform で特定できないエラーが発生しました。もう一度お試しください。',
+        'media_unavailable' => ':platform に送信するメディアを取得できませんでした。もう一度お試しください。',
+        'facebook' => [
+            'processing_failed' => 'Facebook でこの動画を処理できませんでした。リール動画の要件を満たしているか確認して、もう一度お試しください。',
+            'upload_incomplete' => 'Facebook が動画全体を受信できませんでした。もう一度お試しください。',
+        ],
+        'linkedin' => [
+            'server_error' => 'LinkedIn でサーバーエラーが発生しました。もう一度お試しください。',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'YouTubeでアップロードの完了中にエラーが発生しました。再試行する前にチャンネルを確認してください。動画がすでに公開されている可能性があります。',
+        ],
         'google_business' => [
             'no_location' => 'この Google ビジネス プロフィール アカウントには店舗が設定されていません。再接続してください。',
             'permission_denied' => '権限がありません。再接続して、この店舗へのアクセスを確認してください。',

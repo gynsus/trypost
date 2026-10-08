@@ -831,6 +831,22 @@ return [
         'publishing_timed_out' => 'انتهت مهلة النشر. يرجى المحاولة مرة أخرى.',
         'rejected_in_review' => 'رفضت Google هذا المنشور أثناء المراجعة. عدّل المحتوى أو الصورة وحاول مرة أخرى.',
         'review_unconfirmed' => 'لم تؤكد Google حالة هذا المنشور. تحقّق من ملفك التجاري وحاول مرة أخرى.',
+        'instagram' => [
+            'processing_failed' => 'تعذّر على Instagram معالجة هذا الملف. جرّب ملفًا آخر.',
+        ],
+        'content_too_long' => 'يحتوي هذا المنشور على :provided حرفًا، لكن :platform يسمح بـ :max.',
+        'unrecognized_error' => 'أعاد :platform خطأً لم نتمكن من تحديده. حاول مرة أخرى.',
+        'media_unavailable' => 'تعذّر علينا جلب الوسائط لإرسالها إلى :platform. حاول مرة أخرى.',
+        'facebook' => [
+            'processing_failed' => 'تعذّر على Facebook معالجة هذا الفيديو. تأكد من أنه يستوفي متطلبات Reels وحاول مرة أخرى.',
+            'upload_incomplete' => 'لم يستلم Facebook الفيديو كاملًا. حاول مرة أخرى.',
+        ],
+        'linkedin' => [
+            'server_error' => 'حدث خطأ في خادم LinkedIn. حاول مرة أخرى.',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'فشل YouTube في إنهاء الرفع. تحقق من قناتك قبل المحاولة مرة أخرى: قد يكون الفيديو موجودًا بالفعل.',
+        ],
         'google_business' => [
             'no_location' => 'حساب Google Business Profile هذا بلا موقع مُعد. أعد ربطه.',
             'permission_denied' => 'تم رفض الإذن. أعد الربط وأكّد الوصول إلى هذا الموقع.',

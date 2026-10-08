@@ -831,6 +831,22 @@ return [
         'publishing_timed_out' => 'A publicação excedeu o tempo limite. Tente novamente.',
         'rejected_in_review' => 'O Google recusou este post na revisão. Edite o conteúdo ou a imagem e tente novamente.',
         'review_unconfirmed' => 'O Google nunca confirmou este post. Confira seu Perfil da Empresa e tente novamente.',
+        'instagram' => [
+            'processing_failed' => 'O Instagram não conseguiu processar esta mídia. Tente outro arquivo.',
+        ],
+        'content_too_long' => 'Este post tem :provided caracteres, mas o :platform permite :max.',
+        'unrecognized_error' => 'O :platform retornou um erro que não conseguimos identificar. Tente novamente.',
+        'media_unavailable' => 'Não conseguimos buscar a mídia para enviar ao :platform. Tente novamente.',
+        'facebook' => [
+            'processing_failed' => 'O Facebook não conseguiu processar este vídeo. Confira se ele atende aos requisitos de Reels e tente novamente.',
+            'upload_incomplete' => 'O Facebook não recebeu o vídeo inteiro. Tente novamente.',
+        ],
+        'linkedin' => [
+            'server_error' => 'O LinkedIn teve um erro no servidor. Tente novamente.',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'O YouTube falhou ao concluir o envio. Confira seu canal antes de tentar de novo: o vídeo pode já estar lá.',
+        ],
         'google_business' => [
             'no_location' => 'Esta conta do Google Business Profile não tem um local configurado. Reconecte-a.',
             'permission_denied' => 'Permissão negada. Reconecte e confirme o acesso a este local.',

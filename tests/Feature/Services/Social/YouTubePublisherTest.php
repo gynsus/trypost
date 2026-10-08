@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
+use App\Exceptions\PlatformUnavailableException;
+use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\YouTubePublishException;
 use App\Exceptions\TokenExpiredException;
 use App\Models\Post;
@@ -17,6 +19,7 @@ use App\Support\YouTubeMetadata;
 use Google\Client;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 function fakeYouTubeUpload(array $responses = []): YouTubePublisher
 {
@@ -502,4 +505,61 @@ test('a long youtube content becomes the description while the title stays short
         return mb_strlen($payload['snippet']['title']) <= 100
             && $payload['snippet']['description'] === trim(str_repeat('word ', 400));
     });
+});
+
+test('a Google server error before the final chunk retries the upload', function (string $url, array $video) {
+    Log::spy();
+    $this->post->update(['media' => [$video]]);
+    $publisher = fakeYouTubeUpload([
+        'https://example.com/video.mp4' => fn () => Http::response(str_repeat('x', $video['size'])),
+        $url => Http::response([
+            'error' => ['code' => 503, 'message' => 'Backend Error', 'errors' => [['reason' => 'backendError', 'message' => 'Backend Error']]],
+        ], 503),
+    ]);
+
+    expect(fn () => $publisher->publish($this->postPlatform->fresh()))
+        ->toThrow(fn (PlatformUnavailableException $exception) => expect($exception->httpStatus)->toBe(503));
+
+    Log::shouldNotHaveReceived('error', ['YouTube upload failed', Mockery::any()]);
+})->with([
+    'starting the upload session' => [
+        'https://youtube.googleapis.com/upload/youtube/v3/videos*',
+        ['id' => 'v', 'url' => 'https://example.com/video.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'v.mp4', 'size' => 2048],
+    ],
+    'a chunk before the last one' => [
+        'https://upload.example.test/session',
+        ['id' => 'v', 'url' => 'https://example.com/video.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'v.mp4', 'size' => 10 * 1024 * 1024 + 2048],
+    ],
+]);
+
+test('a Google backendError below 500 retries the upload without an http status', function () {
+    $publisher = fakeYouTubeUpload([
+        'https://youtube.googleapis.com/upload/youtube/v3/videos*' => Http::response([
+            'error' => ['code' => 400, 'message' => 'Backend Error', 'errors' => [['reason' => 'backendError', 'message' => 'Backend Error']]],
+        ], 400),
+    ]);
+    $this->post->update(['media' => [[
+        'id' => 'v', 'url' => 'https://example.com/video.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'v.mp4',
+    ]]]);
+
+    expect(fn () => $publisher->publish($this->postPlatform->fresh()))
+        ->toThrow(fn (PlatformUnavailableException $exception) => expect($exception->httpStatus)->toBeNull());
+});
+
+test('a Google server error on the final chunk fails without retrying because the video may exist', function () {
+    $this->post->update(['media' => [[
+        'id' => 'v', 'url' => 'https://example.com/video.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'v.mp4',
+    ]]]);
+    $publisher = fakeYouTubeUpload([
+        'https://upload.example.test/session' => Http::response([
+            'error' => ['code' => 503, 'message' => 'Backend Error', 'errors' => [['reason' => 'backendError', 'message' => 'Backend Error']]],
+        ], 503),
+    ]);
+
+    expect(fn () => $publisher->publish($this->postPlatform->fresh()))
+        ->toThrow(function (YouTubePublishException $exception) {
+            expect($exception->category)->toBe(ErrorCategory::ServerError)
+                ->and($exception->userMessage)->toBe(__('posts.errors.youtube.upload_unconfirmed'))
+                ->and($exception->platformErrorCode)->toBe('backendError');
+        });
 });

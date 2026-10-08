@@ -13,9 +13,12 @@ use App\Enums\SocialAccount\Status as AccountStatus;
 use App\Enums\TikTok\PrivacyLevel;
 use App\Events\PostPlatformStatusUpdated;
 use App\Exceptions\PlatformUnavailableException;
+use App\Exceptions\Social\ContentLimitException;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\InstagramPublishException;
 use App\Exceptions\Social\LinkedInPublishException;
+use App\Exceptions\Social\SocialPublishException;
+use App\Exceptions\Social\YouTubePublishException;
 use App\Exceptions\TokenExpiredException;
 use App\Jobs\PublishToSocialPlatform;
 use App\Jobs\SendNotification;
@@ -223,9 +226,14 @@ test('publish keeps the vetted user message from a publish exception', function 
     expect($this->postPlatform->error_message)->toBe('LinkedIn rejected this post.');
 });
 
-test('publish reports caught publish exceptions so Nightwatch sees them', function (LinkedInPublishException $exception) {
+test('publish reports an unmapped publish exception so Nightwatch sees it', function () {
     Event::fake();
     Exceptions::fake();
+
+    $exception = new LinkedInPublishException(
+        userMessage: 'Something LinkedIn has not told us about.',
+        category: ErrorCategory::Unknown,
+    );
 
     $publisher = Mockery::mock(LinkedInPublisher::class);
     $publisher->shouldReceive('publish')->andThrow($exception);
@@ -239,6 +247,46 @@ test('publish reports caught publish exceptions so Nightwatch sees them', functi
     $this->postPlatform->refresh();
     expect($this->postPlatform->status)->toBe(PlatformStatus::Failed)
         ->and($this->postPlatform->error_message)->toBe($exception->userMessage);
+});
+
+test('publish logs but does not report a documented rejection the user must act on', function (LinkedInPublishException $exception) {
+    Event::fake();
+    Exceptions::fake();
+    Log::spy();
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow($exception);
+
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    (new PublishToSocialPlatform($this->postPlatform))->handle();
+
+    Exceptions::assertNothingReported();
+    Log::shouldHaveReceived('error')
+        ->withArgs(fn (string $message, array $context): bool => $message === 'Social publish failed'
+            && $context['exception'] === LinkedInPublishException::class)
+        ->once();
+    $this->postPlatform->refresh();
+    expect($this->postPlatform->status)->toBe(PlatformStatus::Failed)
+        ->and($this->postPlatform->error_message)->toBe($exception->userMessage);
+})->with([
+    'permission' => fn () => linkedInRejection(403),
+]);
+
+test('publish reports a failure that can be ours, even when categorized', function (SocialPublishException $exception) {
+    Event::fake();
+    Exceptions::fake();
+    Log::spy();
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow($exception);
+
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    (new PublishToSocialPlatform($this->postPlatform))->handle();
+
+    Exceptions::assertReported($exception::class);
+    expect($this->postPlatform->refresh()->status)->toBe(PlatformStatus::Failed);
 })->with([
     'server error' => fn () => new LinkedInPublishException(
         userMessage: 'LinkedIn could not process the media.',
@@ -246,11 +294,57 @@ test('publish reports caught publish exceptions so Nightwatch sees them', functi
         platformErrorCode: 'media-processing-timeout',
         rawResponse: '{"status":"ERROR"}',
     ),
-    'content policy' => fn () => new LinkedInPublishException(
-        userMessage: 'LinkedIn rejected this post.',
-        category: ErrorCategory::ContentPolicy,
+    'content over the limit at publish time' => fn () => ContentLimitException::exceeds(Platform::LinkedIn, 3000, 3200),
+    'our own media failure' => fn () => new LinkedInPublishException(
+        userMessage: 'Unsupported video format.',
+        category: ErrorCategory::MediaFormat,
     ),
+    'our own configuration failure' => fn () => new LinkedInPublishException(
+        userMessage: 'LinkedIn organization ID not configured.',
+        category: ErrorCategory::Permission,
+    ),
+    'a mapped server error' => fn () => linkedInRejection(500),
+    'a request LinkedIn could not process' => fn () => linkedInRejection(422),
 ]);
+
+test('publish reports a YouTube download that came back empty, though it is a media format failure', function () {
+    Event::fake();
+    Exceptions::fake();
+
+    $account = SocialAccount::factory()->youtube()->create([
+        'workspace_id' => $this->workspace->id,
+        'token_expires_at' => now()->addDays(7),
+    ]);
+    $this->post->update(['content' => 'A short', 'media' => [[
+        'id' => 'video-1',
+        'type' => 'video',
+        'path' => 'medias/video.mp4',
+        'url' => 'https://example.com/video.mp4',
+        'mime_type' => 'video/mp4',
+        'original_filename' => 'video.mp4',
+    ]]]);
+    $postPlatform = PostPlatform::factory()->youtube()->create([
+        'post_id' => $this->post->id,
+        'social_account_id' => $account->id,
+        'content_type' => ContentType::YouTubeShort,
+        'scheduled_before_media_checks' => true,
+    ]);
+    Http::fake(['https://example.com/video.mp4' => Http::response('tiny')]);
+
+    (new PublishToSocialPlatform($postPlatform))->handle();
+
+    Exceptions::assertReported(fn (YouTubePublishException $exception): bool => $exception->category === ErrorCategory::MediaFormat
+        && str_contains($exception->userMessage, 'Downloaded video is too small or empty'));
+    expect($postPlatform->fresh()->status)->toBe(PlatformStatus::Failed);
+});
+
+function linkedInRejection(int $status): LinkedInPublishException
+{
+    return LinkedInPublishException::fromApiResponse(
+        Http::fake(['*' => Http::response(['message' => 'Rejected', 'status' => $status], $status)])
+            ->post(config('trypost.platforms.linkedin.api').'/rest/posts'),
+    );
+}
 
 test('publish reports unexpected errors so Nightwatch sees them', function () {
     Event::fake();
@@ -269,7 +363,7 @@ test('publish reports unexpected errors so Nightwatch sees them', function () {
     expect($this->postPlatform->error_message)->toBe('An unexpected error occurred while publishing. Please try again.');
 });
 
-test('publish reports token expiry so Nightwatch sees it', function () {
+test('publish does not report a token expiry it settles', function () {
     Event::fake();
     Exceptions::fake();
     Mail::fake();
@@ -285,11 +379,11 @@ test('publish reports token expiry so Nightwatch sees it', function () {
 
     (new PublishToSocialPlatform($this->postPlatform))->handle();
 
-    Exceptions::assertReportedCount(1);
-    Exceptions::assertReported(TokenExpiredException::class);
+    Exceptions::assertNothingReported();
+    expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Failed);
 });
 
-test('publish reports a failed token refresh once', function () {
+test('publish does not report a token refresh that confirms the token is dead', function () {
     Event::fake();
     Exceptions::fake();
     Mail::fake();
@@ -304,8 +398,27 @@ test('publish reports a failed token refresh once', function () {
 
     (new PublishToSocialPlatform($this->postPlatform))->handle();
 
+    Exceptions::assertNothingReported();
+    expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Failed);
+});
+
+test('publish reports an unexpected error from the token refresh once', function () {
+    Event::fake();
+    Exceptions::fake();
+    Mail::fake();
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow(new TokenExpiredException('Token expired', '190'));
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    $verifier = Mockery::mock(ConnectionVerifier::class);
+    $verifier->shouldReceive('verify')->andThrow(new RuntimeException('Refresh exploded'));
+    $this->app->instance(ConnectionVerifier::class, $verifier);
+
+    (new PublishToSocialPlatform($this->postPlatform))->handle();
+
     Exceptions::assertReportedCount(1);
-    Exceptions::assertReported(fn (TokenExpiredException $e): bool => $e->getMessage() === 'Refresh failed');
+    Exceptions::assertReported(fn (RuntimeException $e): bool => $e->getMessage() === 'Refresh exploded');
     expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Failed);
 });
 
@@ -629,7 +742,7 @@ test('publish honors a platform-specific retry delay and retry limit', function 
             && Carbon::instance($job->delay)->equalTo($now->copy()->addSeconds(30));
     });
 
-    $this->postPlatform->update(['error_context' => ['retry_count' => 2]]);
+    $this->postPlatform->update(['error_context' => [...$this->postPlatform->error_context, 'processing_retry_count' => 2]]);
     (new PublishToSocialPlatform($this->postPlatform->fresh()))->handle();
 
     expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Failed);
@@ -694,10 +807,11 @@ test('publish preserves resumable context when a later transient error has no co
         ->and($context['http_status'] ?? null)->toBe(503);
 });
 
-test('publish preserves a resumable retry policy after the global retry limit', function () {
+test('an unrelated outage after a processing reschedule does not inherit the processing retry policy', function () {
     Bus::fake([PublishToSocialPlatform::class]);
     Event::fake();
     Mail::fake();
+    $this->freezeTime();
 
     $this->postPlatform->update([
         'error_context' => [
@@ -705,7 +819,7 @@ test('publish preserves a resumable retry policy after the global retry limit', 
                 'stage' => 'final_container',
                 'container_id' => 'container-123',
             ],
-            'retry_count' => 7,
+            'processing_retry_count' => 7,
             'max_retries' => 90,
             'retry_delay_seconds' => 10,
         ],
@@ -722,9 +836,135 @@ test('publish preserves a resumable retry policy after the global retry limit', 
     $context = $this->postPlatform->fresh()->error_context;
 
     expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Retrying)
-        ->and($context['retry_count'] ?? null)->toBe(8)
-        ->and($context['max_retries'] ?? null)->toBe(90)
-        ->and($context['retry_delay_seconds'] ?? null)->toBe(10);
+        ->and($context['instagram_workflow']['container_id'] ?? null)->toBe('container-123')
+        ->and($context['retry_count'] ?? null)->toBe(1)
+        ->and($context['processing_retry_count'] ?? null)->toBe(7)
+        ->and($context)->not->toHaveKey('max_retries')
+        ->and($context)->not->toHaveKey('retry_delay_seconds')
+        ->and($context['next_attempt_at'] ?? null)->toBe(now()->addSeconds(600)->toIso8601String());
+});
+
+test('a processing reschedule keeps counting against its own retry policy', function () {
+    Bus::fake([PublishToSocialPlatform::class]);
+    Event::fake();
+    $this->freezeTime();
+
+    $this->postPlatform->update([
+        'error_context' => ['retry_count' => 2, 'processing_retry_count' => 7, 'max_retries' => 30, 'retry_delay_seconds' => 60],
+    ]);
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow(
+        new PlatformUnavailableException('Still processing', retryDelaySeconds: 60, maxRetries: 30)
+    );
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    (new PublishToSocialPlatform($this->postPlatform->fresh()))->handle();
+
+    $context = $this->postPlatform->fresh()->error_context;
+
+    expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Retrying)
+        ->and($context['processing_retry_count'] ?? null)->toBe(8)
+        ->and($context['retry_count'] ?? null)->toBe(2)
+        ->and($context['max_retries'] ?? null)->toBe(30)
+        ->and($context['retry_delay_seconds'] ?? null)->toBe(60)
+        ->and($context['next_attempt_at'] ?? null)->toBe(now()->addSeconds(60)->toIso8601String());
+});
+
+test('alternating processing reschedules and outages still exhausts the outage retries', function () {
+    Bus::fake([PublishToSocialPlatform::class]);
+    Event::fake();
+    Mail::fake();
+
+    $this->postPlatform->update([
+        'error_context' => ['retry_count' => 6, 'processing_retry_count' => 3, 'max_retries' => 30, 'retry_delay_seconds' => 60],
+    ]);
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow(
+        new PlatformUnavailableException('Service unavailable', 503)
+    );
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    (new PublishToSocialPlatform($this->postPlatform->fresh()))->handle();
+
+    expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Failed);
+    Bus::assertNotDispatched(PublishToSocialPlatform::class);
+});
+
+test('an outage after a processing reschedule is dispatched under a new unique attempt', function () {
+    Bus::fake([PublishToSocialPlatform::class]);
+    Event::fake();
+
+    $this->postPlatform->update([
+        'error_context' => ['processing_retry_count' => 1, 'max_retries' => 30, 'retry_delay_seconds' => 60],
+    ]);
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow(
+        new PlatformUnavailableException('Service unavailable', 503)
+    );
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    (new PublishToSocialPlatform($this->postPlatform->fresh(), 1))->handle();
+
+    Bus::assertDispatched(PublishToSocialPlatform::class, fn (PublishToSocialPlatform $job): bool => $job->uniqueAttempt === 2);
+});
+
+test('an outage on a status poll rescheduled before 2.0 restarts the outage retries', function () {
+    Bus::fake([PublishToSocialPlatform::class]);
+    Event::fake();
+    Mail::fake();
+    $this->freezeTime();
+
+    $this->postPlatform->update([
+        'error_context' => ['retry_count' => 40, 'max_retries' => 90, 'retry_delay_seconds' => 10],
+    ]);
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow(
+        new PlatformUnavailableException('Service unavailable', 503)
+    );
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    (new PublishToSocialPlatform($this->postPlatform->fresh(), 40))->handle();
+
+    $context = $this->postPlatform->fresh()->error_context;
+
+    expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Retrying)
+        ->and($context['retry_count'] ?? null)->toBe(1)
+        ->and($context['processing_retry_count'] ?? null)->toBe(40)
+        ->and($context)->not->toHaveKey('max_retries')
+        ->and($context['next_attempt_at'] ?? null)->toBe(now()->addSeconds(600)->toIso8601String());
+
+    Bus::assertDispatched(PublishToSocialPlatform::class, fn (PublishToSocialPlatform $job): bool => $job->uniqueAttempt > 40);
+});
+
+test('a status poll rescheduled before 2.0 keeps counting its poll budget', function () {
+    Bus::fake([PublishToSocialPlatform::class]);
+    Event::fake();
+    $this->freezeTime();
+
+    $this->postPlatform->update([
+        'error_context' => ['retry_count' => 40, 'max_retries' => 90, 'retry_delay_seconds' => 10],
+    ]);
+
+    $publisher = Mockery::mock(LinkedInPublisher::class);
+    $publisher->shouldReceive('publish')->andThrow(
+        new PlatformUnavailableException('Still processing', retryDelaySeconds: 10, maxRetries: 90)
+    );
+    $this->app->instance(LinkedInPublisher::class, $publisher);
+
+    (new PublishToSocialPlatform($this->postPlatform->fresh(), 40))->handle();
+
+    $context = $this->postPlatform->fresh()->error_context;
+
+    expect($this->postPlatform->fresh()->status)->toBe(PlatformStatus::Retrying)
+        ->and($context['processing_retry_count'] ?? null)->toBe(41)
+        ->and((int) ($context['retry_count'] ?? 0))->toBe(0)
+        ->and($context['max_retries'] ?? null)->toBe(90);
+
+    Bus::assertDispatched(PublishToSocialPlatform::class, fn (PublishToSocialPlatform $job): bool => $job->uniqueAttempt > 40);
 });
 
 test('post stays in Publishing while one platform is still Retrying', function () {
@@ -2162,7 +2402,7 @@ test('a mastodon thread that fails midway is visible and its retry never posts a
 
     $failed = $target->fresh();
     expect($failed->status)->toBe(PlatformStatus::Failed)
-        ->and($failed->error_message)->toBe(__('posts.errors.thread_incomplete', ['published' => 2, 'total' => 3, 'error' => 'Media validation failed.']))
+        ->and($failed->error_message)->toBe(__('posts.errors.thread_incomplete', ['published' => 2, 'total' => 3, 'error' => 'Validation failed']))
         ->and(collect(data_get($failed->error_context, 'thread_progress'))->pluck('id')->all())->toBe(['1', '2']);
 
     Bus::fake([PublishToSocialPlatform::class]);

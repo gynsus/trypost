@@ -170,6 +170,104 @@ test('refreshes tiktok token before verifying when expired', function () {
     Http::assertSent(fn ($request) => str_contains($request->url(), config('trypost.platforms.tiktok.api').'/oauth/token'));
 });
 
+test('a tiktok refresh answered with a dead refresh token error expires the account, whatever the status', function (int $status, string $error) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response([
+            'error' => $error,
+            'error_description' => 'Refresh token is invalid or expired.',
+            'log_id' => '20261007182924',
+        ], $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(function (TokenExpiredException $exception) use ($error): void {
+            expect($exception->getMessage())->toBe('Refresh token is invalid or expired.')
+                ->and($exception->platformErrorCode)->toBe($error);
+        });
+
+    expect($account->fresh()->access_token)->toBe('old_token');
+})->with([200, 400])->with(['invalid_grant']);
+
+test('a tiktok refresh answered with a json scalar stays transient', function (int $status) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response('"unexpected"', $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(PlatformUnavailableException::class);
+
+    expect($account->fresh()->access_token)->toBe('old_token');
+})->with([200, 400]);
+
+test('a tiktok refresh answered with any error but invalid_grant stays transient, whatever the status', function (int $status, string $error) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response([
+            'error' => $error,
+            'error_description' => 'Something went wrong.',
+            'log_id' => '20261007182924',
+        ], $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(PlatformUnavailableException::class);
+
+    expect($account->fresh()->access_token)->toBe('old_token');
+})->with([200, 400])->with(['server_error', 'temporarily_unavailable', 'invalid_client', 'invalid_request', 'access_denied']);
+
+test('a tiktok refresh error body with non-string fields never breaks the classification', function (int $status, array $body, string $exception) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response($body, $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))->toThrow($exception);
+})->with([
+    'array error on 200' => [200, ['error' => ['code' => 'x'], 'error_description' => ['a']], PlatformUnavailableException::class],
+    'array description on 200' => [200, ['error' => 'server_error', 'error_description' => ['a']], PlatformUnavailableException::class],
+    'array description on a dead token' => [400, ['error' => 'invalid_grant', 'error_description' => ['a']], TokenExpiredException::class],
+    'array description on a dead token with 200' => [200, ['error' => 'invalid_grant', 'error_description' => ['a']], TokenExpiredException::class],
+]);
+
+test('tiktok refresh answered with 200 and neither a token nor an error stays transient', function () {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response(['log_id' => '20261007182924'], 200),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(PlatformUnavailableException::class);
+
+    expect($account->fresh()->access_token)->toBe('old_token');
+});
+
 test('refreshes pinterest token before verifying when expired', function () {
     Http::fake([
         config('trypost.platforms.pinterest.api').'/oauth/token' => Http::response([
@@ -245,6 +343,25 @@ test('throws exception when x refresh fails', function () {
     expect(fn () => $verifier->verify($account))
         ->toThrow(TokenExpiredException::class, 'Failed to refresh X token');
 });
+
+test('a refresh failure without a usable error_description falls back to the next message', function (array $body, string $expected) {
+    Http::fake([
+        config('trypost.platforms.linkedin.oauth_api').'/oauth/v2/accessToken' => Http::response($body, 400),
+    ]);
+
+    $account = SocialAccount::factory()->linkedin()->create([
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->verify($account))
+        ->toThrow(fn (TokenExpiredException $exception) => expect($exception->getMessage())->toBe($expected));
+})->with([
+    'empty description' => [['error_description' => '', 'error' => ['message' => 'Refresh token revoked']], 'Refresh token revoked'],
+    'array description' => [['error_description' => ['a'], 'error' => ['message' => 'Refresh token revoked']], 'Refresh token revoked'],
+    'empty description and no message' => [['error_description' => ''], 'Failed to refresh LinkedIn token'],
+    'non-string description and message' => [['error_description' => 42, 'error' => ['message' => ['a']]], 'Failed to refresh LinkedIn token'],
+]);
 
 test('does not refresh facebook token as it uses long-lived tokens', function () {
     Http::fake([

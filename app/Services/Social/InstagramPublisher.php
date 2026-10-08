@@ -31,9 +31,10 @@ class InstagramPublisher
 
     private PostPlatform $postPlatform;
 
-    private const int STATUS_RETRY_DELAY_SECONDS = 10;
+    private const int STATUS_RETRY_DELAY_SECONDS = 60;
 
-    private const int STATUS_MAX_RETRIES = 90;
+    /** Two hours of delayed retries for processing and transient Graph failures. */
+    private const int STATUS_MAX_RETRIES = 120;
 
     private const string WORKFLOW_CAROUSEL_CHILDREN = 'carousel_children';
 
@@ -384,7 +385,8 @@ class InstagramPublisher
                 'body' => $this->redactResponseBody($publishResponse->body()),
             ]);
 
-            if (GraphError::isTransientFailure($publishResponse)) {
+            if (! InstagramPublishException::isDocumentedRejection($publishResponse)
+                && (GraphError::isTransientFailure($publishResponse) || InstagramPublishException::isMediaNotReady($publishResponse))) {
                 throw $this->pendingContainerException($containerId, $workflow, $publishResponse->status());
             }
 
@@ -559,11 +561,7 @@ class InstagramPublisher
             'body' => $body,
         ]);
 
-        return new InstagramPublishException(
-            userMessage: 'Instagram media processing failed',
-            category: ErrorCategory::ServerError,
-            rawResponse: $body,
-        );
+        return InstagramPublishException::fromContainerStatus(data_get($response->json(), 'status'), $body);
     }
 
     /**
@@ -581,7 +579,7 @@ class InstagramPublisher
                 'body' => $this->redactResponseBody($response->body()),
             ]);
 
-            if (GraphError::isTransientFailure($response)) {
+            if (! InstagramPublishException::isDocumentedRejection($response) && GraphError::isTransientFailure($response)) {
                 throw new PlatformUnavailableException(
                     message: "Instagram {$label} creation failed transiently",
                     httpStatus: $response->status(),

@@ -833,6 +833,22 @@ return [
         'publishing_timed_out' => 'Die Veröffentlichung ist abgelaufen. Bitte erneut versuchen.',
         'rejected_in_review' => 'Google hat diesen Beitrag bei der Prüfung abgelehnt. Bearbeite den Inhalt oder das Bild und versuche es erneut.',
         'review_unconfirmed' => 'Google hat den Status dieses Beitrags nicht bestätigt. Prüfe dein Unternehmensprofil und versuche es erneut.',
+        'instagram' => [
+            'processing_failed' => 'Instagram konnte diese Datei nicht verarbeiten. Versuche eine andere Datei.',
+        ],
+        'content_too_long' => 'Dieser Beitrag hat :provided Zeichen, :platform erlaubt aber nur :max.',
+        'unrecognized_error' => ':platform hat einen Fehler gemeldet, den wir nicht zuordnen konnten. Versuche es erneut.',
+        'media_unavailable' => 'Wir konnten die Medien für :platform nicht abrufen. Versuche es erneut.',
+        'facebook' => [
+            'processing_failed' => 'Facebook konnte dieses Video nicht verarbeiten. Prüfe, ob es die Anforderungen für Reels erfüllt, und versuche es erneut.',
+            'upload_incomplete' => 'Facebook hat nicht das ganze Video erhalten. Versuche es erneut.',
+        ],
+        'linkedin' => [
+            'server_error' => 'LinkedIn hatte einen Serverfehler. Bitte versuche es erneut.',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'YouTube ist beim Abschließen des Uploads fehlgeschlagen. Prüfe deinen Kanal, bevor du es erneut versuchst: Das Video ist dort vielleicht schon.',
+        ],
         'google_business' => [
             'no_location' => 'Dieses Google-Business-Profile-Konto hat keinen Standort konfiguriert. Bitte erneut verbinden.',
             'permission_denied' => 'Zugriff verweigert. Verbinde erneut und bestätige den Zugriff auf diesen Standort.',

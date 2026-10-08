@@ -290,21 +290,19 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
 
     private function rescheduleForRetry(PlatformUnavailableException $e): void
     {
-        $retryCount = (int) data_get($this->postPlatform->error_context, 'retry_count', 0) + 1;
-        $maxRetries = (int) ($e->maxRetries
-            ?? data_get($this->postPlatform->error_context, 'max_retries')
-            ?? self::MAX_PLATFORM_UNAVAILABLE_RETRIES);
-        $retryDelaySeconds = (int) ($e->retryDelaySeconds
-            ?? data_get($this->postPlatform->error_context, 'retry_delay_seconds')
-            ?? self::DEFAULT_RETRY_DELAY_SECONDS);
+        $previousContext = self::withSeparateRetryCounters($this->postPlatform->error_context ?? []);
+        $hasOwnPolicy = $e->maxRetries !== null || $e->retryDelaySeconds !== null;
+        $counterKey = $hasOwnPolicy ? 'processing_retry_count' : 'retry_count';
+        $retryCount = (int) data_get($previousContext, $counterKey, 0) + 1;
+        $maxRetries = $e->maxRetries ?? self::MAX_PLATFORM_UNAVAILABLE_RETRIES;
+        $retryDelaySeconds = $e->retryDelaySeconds ?? self::DEFAULT_RETRY_DELAY_SECONDS;
         $context = [
-            ...($this->postPlatform->error_context ?? []),
+            ...Arr::except($previousContext, ['max_retries', 'retry_delay_seconds']),
             ...$e->context,
             'category' => ErrorCategory::PlatformUnavailable->value,
             'http_status' => $e->httpStatus,
-            'retry_count' => $retryCount,
-            'max_retries' => $maxRetries,
-            'retry_delay_seconds' => $retryDelaySeconds,
+            $counterKey => $retryCount,
+            ...($hasOwnPolicy ? ['max_retries' => $maxRetries, 'retry_delay_seconds' => $retryDelaySeconds] : []),
             'detail' => $e->getMessage(),
         ];
 
@@ -341,14 +339,39 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
             ],
         ]);
 
-        self::dispatch($this->postPlatform, $retryCount)->delay($nextAttemptAt);
+        self::dispatch(
+            $this->postPlatform,
+            (int) data_get($context, 'retry_count', 0) + (int) data_get($context, 'processing_retry_count', 0),
+        )->delay($nextAttemptAt);
+    }
+
+    /**
+     * Before TryPost 2.0 a status poll counted on `retry_count` and stored
+     * `max_retries`, with no `processing_retry_count`. That count belongs to
+     * the poll budget, so the outage count of such a row starts over.
+     *
+     * @param  array<string, mixed>  $context
+     * @return array<string, mixed>
+     */
+    private static function withSeparateRetryCounters(array $context): array
+    {
+        if (! array_key_exists('max_retries', $context) || array_key_exists('processing_retry_count', $context)) {
+            return $context;
+        }
+
+        return [
+            ...$context,
+            'processing_retry_count' => (int) data_get($context, 'retry_count', 0),
+            'retry_count' => 0,
+        ];
     }
 
     /**
      * A limit refusal (rate limit, posting quota, daily cap) is not a failure
      * yet: the target waits in Retrying until `retry_at`, when
      * ProcessScheduledPosts dispatches it again. A refused TikTok publish_id
-     * is dead, so it is dropped; thread checkpoints stay so the retry resumes.
+     * is dead and X media ids expire before a long wait ends, so both are
+     * dropped; thread checkpoints stay so the retry resumes.
      * Returns false once the retries are spent.
      */
     private function waitForLimitRetry(SocialPublishException $e): bool
@@ -372,6 +395,7 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
                 PublishCheckpoint::TIKTOK_PUBLISH_ID,
                 PublishCheckpoint::TIKTOK_STATUS,
                 PublishCheckpoint::TIKTOK_DERIVATIVE_PATHS,
+                PublishCheckpoint::X_MEDIA,
             ]),
             'category' => ErrorCategory::RateLimit->value,
             'platform_error_code' => $e->platformErrorCode,
@@ -394,9 +418,10 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Caught publish failures never reach Nightwatch unless we report() them.
-     * report() feeds Exceptions; the structured log carries post/platform ids
-     * Nightwatch's exception record does not. In-flight retries stay warnings.
+     * Every caught publish failure is logged with the post/platform ids that
+     * Nightwatch's exception record lacks. Only an expired token and a
+     * documented network rejection the user must act on are not reported;
+     * everything else can be ours, so it reaches Nightwatch.
      *
      * @param  array<string, mixed>  $context
      */
@@ -412,6 +437,10 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
             ...$context,
             'media' => $this->mediaSnapshot($this->postPlatform),
         ]);
+
+        if ($e instanceof TokenExpiredException || ($e instanceof SocialPublishException && $e->isNetworkRejection())) {
+            return;
+        }
 
         report($e);
     }

@@ -2,12 +2,15 @@
 
 declare(strict_types=1);
 
+use App\Enums\Post\Status as PostStatus;
 use App\Enums\PostPlatform\ContentType;
+use App\Enums\PostPlatform\Status as PlatformStatus;
 use App\Enums\SocialAccount\Platform;
 use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\InstagramPublishException;
 use App\Exceptions\TokenExpiredException;
+use App\Jobs\PublishToSocialPlatform;
 use App\Models\Post;
 use App\Models\PostPlatform;
 use App\Models\SocialAccount;
@@ -18,6 +21,7 @@ use App\Services\Social\InstagramPublisher;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
@@ -495,8 +499,8 @@ test('instagram publisher resumes a processing carousel child without recreating
                 'processing_child_container_ids' => ['child-2'],
             ],
             'instagram_status' => 'IN_PROGRESS',
-        ])->and($exception->retryDelaySeconds)->toBe(10)
-            ->and($exception->maxRetries)->toBe(90);
+        ])->and($exception->retryDelaySeconds)->toBe(60)
+            ->and($exception->maxRetries)->toBe(120);
 
         $this->postPlatform->update(['error_context' => $exception->context]);
     }
@@ -659,13 +663,96 @@ test('instagram publisher handles media processing error', function () {
 
     expect(fn () => $this->publisher->publish($this->postPlatform))
         ->toThrow(function (InstagramPublishException $exception): void {
-            expect($exception->getMessage())->toBe('Instagram media processing failed')
+            expect($exception->getMessage())->toBe(__('posts.errors.instagram.processing_failed'))
+                ->and($exception->category)->toBe(ErrorCategory::Unknown)
                 ->and($exception->rawResponse)->toContain('Media download has failed')
                 ->and($exception->rawResponse)->toContain('ERROR');
         });
 
     Http::assertSent(fn (Request $request): bool => str_contains($request->url(), 'container-123')
         && str_contains((string) data_get($request->data(), 'fields', ''), 'status'));
+});
+
+test('instagram publisher explains a container error reported as an error subcode', function (string $status) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'ERROR', 'status' => $status]),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (InstagramPublishException $exception): void {
+            expect($exception->userMessage)->toBe('Unsupported video format. Please upload MP4 or MOV.')
+                ->and($exception->category)->toBe(ErrorCategory::MediaFormat)
+                ->and($exception->platformErrorCode)->toBe('2207026');
+        });
+})->with([
+    'bare subcode' => '2207026',
+    'padded subcode' => ' 2207026 ',
+]);
+
+test('instagram publisher never reads a subcode out of a container status sentence', function (string $status, ?string $code) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'ERROR', 'status' => $status]),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (InstagramPublishException $exception) use ($status, $code): void {
+            expect($exception->userMessage)->toBe(__('posts.errors.instagram.processing_failed'))
+                ->and($exception->userMessage)->not->toContain($status)
+                ->and($exception->category)->toBe(ErrorCategory::Unknown)
+                ->and($exception->platformErrorCode)->toBe($code);
+        });
+})->with([
+    'subcode in a sentence' => ['Error: Media upload has failed with error code 2207026', null],
+    'unmapped bare subcode' => ['2207999', '2207999'],
+]);
+
+test('instagram publisher says processing failed when the container gives no reason', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'ERROR']),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(fn (InstagramPublishException $exception) => expect($exception->userMessage)
+            ->toBe(__('posts.errors.instagram.processing_failed')));
 });
 
 test('instagram publisher resumes media processing without creating another container', function () {
@@ -707,8 +794,8 @@ test('instagram publisher resumes media processing without creating another cont
                 'container_id' => 'container-123',
             ],
             'instagram_status' => 'IN_PROGRESS',
-        ])->and($exception->retryDelaySeconds)->toBe(10)
-            ->and($exception->maxRetries)->toBe(90);
+        ])->and($exception->retryDelaySeconds)->toBe(60)
+            ->and($exception->maxRetries)->toBe(120);
 
         $this->postPlatform->update(['error_context' => $exception->context]);
     }
@@ -755,6 +842,92 @@ test('instagram publisher does not publish a container that never finishes proce
 
     Http::assertNotSent(fn ($request) => str_contains($request->url(), '/media_publish'));
 });
+
+test('instagram retries long interruptions without abandoning or duplicating the container', function (int $minutes, string $interruption, bool $recovers) {
+    Queue::fake();
+    $this->freezeTime();
+    $startedAt = now();
+    $availableAt = $startedAt->copy()->addMinutes($minutes);
+    $workflow = ['stage' => 'final_container', 'container_id' => 'container-123'];
+    $this->post->update(['status' => PostStatus::Publishing]);
+    $this->postPlatform->update(['error_context' => ['instagram_workflow' => $workflow]]);
+
+    Http::fake(function (Request $request) use ($availableAt, $interruption, $recovers) {
+        $unavailable = ! $recovers || now()->lt($availableAt);
+
+        if (str_contains($request->url(), '/container-123')) {
+            if ($unavailable && $interruption === 'connection') {
+                throw new ConnectionException('Instagram is unreachable');
+            }
+
+            if ($unavailable && $interruption === 'status') {
+                return Http::response(['error' => ['code' => 2, 'is_transient' => true]], 503);
+            }
+
+            return Http::response(['status_code' => $unavailable && $interruption === 'processing' ? 'IN_PROGRESS' : 'FINISHED']);
+        }
+
+        if (str_ends_with($request->url(), '/media_publish')) {
+            if ($unavailable && $interruption === 'publish') {
+                return Http::response(['error' => ['code' => 2, 'is_transient' => true]], 503);
+            }
+
+            return Http::response(['id' => 'media-123456789']);
+        }
+
+        if (str_contains($request->url(), '/media-123456789')) {
+            return Http::response(['permalink' => 'https://www.instagram.com/p/ABC123/']);
+        }
+
+        throw new RuntimeException('Unexpected Instagram request: '.$request->url());
+    });
+
+    $job = new PublishToSocialPlatform($this->postPlatform);
+
+    for ($minute = 0; $minute < $minutes; $minute++) {
+        $job->handle();
+
+        expect($this->postPlatform->refresh()->status)->toBe(PlatformStatus::Retrying)
+            ->and($this->postPlatform->error_context['instagram_workflow'])->toBe($workflow)
+            ->and($this->postPlatform->error_context['processing_retry_count'])->toBe($minute + 1);
+
+        $job = Queue::pushed(PublishToSocialPlatform::class)->last();
+
+        expect($job->uniqueAttempt)->toBe($minute + 1)
+            ->and($job->delay->equalTo(now()->addMinute()))->toBeTrue();
+
+        $this->travelTo($job->delay);
+
+        if ($minute >= 59) {
+            $this->artisan('social:recover-stuck-posts')->assertSuccessful();
+
+            expect($this->postPlatform->refresh()->status)->toBe(PlatformStatus::Retrying)
+                ->and($this->post->refresh()->status)->toBe(PostStatus::Publishing);
+        }
+    }
+
+    expect(now()->equalTo($availableAt))->toBeTrue();
+    $job->handle();
+
+    expect($this->postPlatform->refresh()->status)->toBe($recovers ? PlatformStatus::Published : PlatformStatus::Failed)
+        ->and($this->post->refresh()->status)->toBe($recovers ? PostStatus::Published : PostStatus::Failed);
+    Queue::assertPushed(PublishToSocialPlatform::class, $minutes);
+    Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), '/media'));
+    expect(Http::recorded(fn (Request $request, $response) => str_ends_with($request->url(), '/media_publish')
+        && $response->successful()))->toHaveCount($recovers ? 1 : 0);
+
+    if (! $recovers) {
+        expect($this->postPlatform->error_message)->toBe(__('posts.errors.platform_unavailable_exhausted'))
+            ->and($this->postPlatform->error_context['instagram_workflow'])->toBe($workflow);
+    }
+})->with([
+    'processing for 30 minutes' => [30, 'processing', true],
+    'status unavailable for over an hour' => [61, 'status', true],
+    'connection unavailable for over an hour' => [61, 'connection', true],
+    'publish unavailable for over an hour' => [61, 'publish', true],
+    'ready on the last retry' => [120, 'processing', true],
+    'still processing after two hours' => [120, 'processing', false],
+]);
 
 test('instagram publisher retries a transient Graph rate-limit on container status', function (int $code) {
     $this->post->update([
@@ -822,6 +995,92 @@ test('instagram publisher retries a transient Graph failure on media_publish', f
     expect(fn () => $this->publisher->publish($this->postPlatform))
         ->toThrow(function (PlatformUnavailableException $exception): void {
             expect($exception->httpStatus)->toBe(500)
+                ->and($exception->context)->toBe([
+                    'instagram_workflow' => [
+                        'stage' => 'final_container',
+                        'container_id' => 'container-123',
+                    ],
+                ]);
+        });
+});
+
+test('instagram publisher fails at once on a documented rejection sent under a transient Graph code', function (string $edge, int $code, int $subcode, ErrorCategory $category) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $rejection = Http::response(['error' => ['message' => 'Rejected', 'code' => $code, 'error_subcode' => $subcode]], 400);
+
+    Http::fake([
+        'https://graph.instagram.com/v25.0/ig_123456789/media' => $edge === 'media' ? $rejection : Http::response(['id' => 'container-123']),
+        'https://graph.instagram.com/v25.0/container-123*' => Http::response(['status_code' => 'FINISHED']),
+        'https://graph.instagram.com/v25.0/ig_123456789/media_publish' => $rejection,
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (InstagramPublishException $exception) use ($subcode, $category): void {
+            expect($exception->platformErrorCode)->toBe((string) $subcode)
+                ->and($exception->category)->toBe($category);
+        });
+})->with([
+    'activity restricted on media_publish' => ['media_publish', 4, 2207051, ErrorCategory::ContentPolicy],
+    'thumbnail offset on the container' => ['media', 1, 2207057, ErrorCategory::MediaFormat],
+]);
+
+test('instagram publisher still retries a documented server subcode sent under a transient Graph code', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    Http::fake([
+        'https://graph.instagram.com/v25.0/ig_123456789/media' => Http::response(['error' => ['message' => 'Server error', 'code' => 2, 'error_subcode' => 2207001]], 500),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))->toThrow(PlatformUnavailableException::class);
+});
+
+test('instagram publisher waits for a container media_publish reports as not ready yet', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'FINISHED']),
+        "{$graph}/ig_123456789/media_publish" => Http::response([
+            'error' => [
+                'message' => 'Media ID is not available',
+                'type' => 'OAuthException',
+                'code' => 9007,
+                'error_subcode' => 2207027,
+                'error_user_msg' => 'The media is not ready for publishing, please wait for a moment',
+            ],
+        ], 400),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (PlatformUnavailableException $exception): void {
+            expect($exception->httpStatus)->toBe(400)
                 ->and($exception->context)->toBe([
                     'instagram_workflow' => [
                         'stage' => 'final_container',
@@ -1026,7 +1285,7 @@ test('instagram publisher fails a resumed container that reports ERROR', functio
 
     expect(fn () => $this->publisher->publish($this->postPlatform->fresh()))
         ->toThrow(function (InstagramPublishException $exception): void {
-            expect($exception->getMessage())->toBe('Instagram media processing failed')
+            expect($exception->getMessage())->toBe(__('posts.errors.instagram.processing_failed'))
                 ->and($exception->rawResponse)->toContain('Media download has failed');
         });
 

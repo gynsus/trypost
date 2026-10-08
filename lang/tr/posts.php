@@ -833,6 +833,22 @@ return [
         'publishing_timed_out' => 'Yayınlama zaman aşımına uğradı. Lütfen tekrar deneyin.',
         'rejected_in_review' => 'Google bu gönderiyi incelemede reddetti. İçeriği veya görseli düzenleyip tekrar deneyin.',
         'review_unconfirmed' => 'Google bu gönderiyi hiç onaylamadı. İşletme Profili\'ni kontrol edip tekrar deneyin.',
+        'instagram' => [
+            'processing_failed' => 'Instagram bu medyayı işleyemedi. Başka bir dosya deneyin.',
+        ],
+        'content_too_long' => 'Bu gönderi :provided karakter, ancak :platform en fazla :max karaktere izin veriyor.',
+        'unrecognized_error' => ':platform tanımlayamadığımız bir hata döndürdü. Lütfen tekrar deneyin.',
+        'media_unavailable' => ':platform platformuna gönderilecek medyayı alamadık. Lütfen tekrar deneyin.',
+        'facebook' => [
+            'processing_failed' => 'Facebook bu videoyu işleyemedi. Reels gereksinimlerini karşıladığından emin olup tekrar deneyin.',
+            'upload_incomplete' => 'Facebook videonun tamamını almadı. Lütfen tekrar deneyin.',
+        ],
+        'linkedin' => [
+            'server_error' => 'LinkedIn\'de bir sunucu hatası oluştu. Lütfen tekrar deneyin.',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'YouTube yüklemeyi tamamlarken başarısız oldu. Tekrar denemeden önce kanalınızı kontrol edin: video zaten orada olabilir.',
+        ],
         'google_business' => [
             'no_location' => 'Bu Google Business Profile hesabında yapılandırılmış bir konum yok. Yeniden bağlayın.',
             'permission_denied' => 'İzin reddedildi. Yeniden bağlanın ve bu konuma erişimi onaylayın.',

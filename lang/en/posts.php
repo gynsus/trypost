@@ -831,6 +831,22 @@ return [
         'publishing_timed_out' => 'Publishing timed out. Please try again.',
         'rejected_in_review' => 'Google rejected this post in review. Edit the content or image and try again.',
         'review_unconfirmed' => 'Google never confirmed this post. Check your Business Profile and try again.',
+        'instagram' => [
+            'processing_failed' => 'Instagram could not process this media. Try another file.',
+        ],
+        'content_too_long' => 'This post has :provided characters, but :platform allows :max.',
+        'unrecognized_error' => ':platform returned an error we could not identify. Please try again.',
+        'media_unavailable' => 'We could not fetch the media to send to :platform. Please try again.',
+        'facebook' => [
+            'processing_failed' => 'Facebook could not process this video. Make sure it meets the Reels requirements and try again.',
+            'upload_incomplete' => 'Facebook did not receive the whole video. Please try again.',
+        ],
+        'linkedin' => [
+            'server_error' => 'LinkedIn had a server error. Please try again.',
+        ],
+        'youtube' => [
+            'upload_unconfirmed' => 'YouTube failed while finishing the upload. Check your channel before trying again: the video may already be there.',
+        ],
         'google_business' => [
             'no_location' => 'This Google Business Profile account has no location configured. Please reconnect it.',
             'permission_denied' => 'Permission denied. Please reconnect and confirm access to this business location.',

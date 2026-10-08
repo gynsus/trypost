@@ -7,13 +7,17 @@ namespace App\Services\Social;
 use App\Dto\MediaItem;
 use App\Enums\Media\Type as MediaType;
 use App\Enums\SocialAccount\Platform;
+use App\Enums\X\MediaProcessingState;
+use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\XPublishException;
 use App\Models\PostPlatform;
 use App\Services\Media\MediaOptimizer;
 use App\Services\Social\Concerns\HasSocialHttpClient;
 use App\Services\Social\Concerns\PublishesThreads;
+use App\Support\Social\PublishCheckpoint;
 use App\Support\Social\ThreadProgress;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Collection;
@@ -31,6 +35,22 @@ class XPublisher
     private string $baseUrl;
 
     private string $accessToken;
+
+    private const int MEDIA_PROCESSING_RETRY_DELAY_SECONDS = 60;
+
+    private const int MEDIA_PROCESSING_MAX_RETRIES = 30;
+
+    /**
+     * The longest wait between two status checks, whatever check_after_secs
+     * asks for, so 20 checks stay inside the publish job's timeout. Media
+     * still processing after them is rescheduled.
+     */
+    private const int MEDIA_STATUS_MAX_WAIT_SECONDS = 30;
+
+    /** @var array<string, string> */
+    private array $uploadedMedia = [];
+
+    private ?string $currentMediaItemId = null;
 
     public function __construct()
     {
@@ -50,6 +70,7 @@ class XPublisher
         }
 
         $this->accessToken = $account->access_token;
+        $this->uploadedMedia = PublishCheckpoint::xMedia($postPlatform->error_context);
 
         $rootHash = ThreadProgress::hash((string) $content, $postPlatform->post->mediaItems->map(fn (MediaItem $item): string => $item->id)->all());
 
@@ -104,15 +125,31 @@ class XPublisher
         $mediaIds = [];
 
         foreach ($media as $mediaItem) {
-            $uploadedMedia = $this->uploadMedia($mediaItem);
+            $this->currentMediaItemId = $mediaItem->id;
+            $mediaId = $this->uploadedMedia[$mediaItem->id] ?? null;
 
-            // v2 API returns data.id, v1 returns media_id
-            $mediaId = data_get($uploadedMedia, 'data.id', data_get($uploadedMedia, 'media_id'));
-            if ($mediaId) {
-                // X expects media_ids as strings in the tweets payload.
-                $mediaIds[] = (string) $mediaId;
-                $this->uploadAltText((string) $mediaId, $mediaItem);
+            if ($mediaId !== null && ! $this->isKnownMedia($mediaId)) {
+                unset($this->uploadedMedia[$mediaItem->id]);
+                $mediaId = null;
             }
+
+            if ($mediaId !== null) {
+                $this->waitForProcessing($mediaId);
+            } else {
+                $mediaId = data_get($this->uploadMedia($mediaItem), 'data.id');
+            }
+
+            if (! $mediaId) {
+                throw new XPublishException(
+                    userMessage: 'X did not accept the media upload. Please try again.',
+                    category: ErrorCategory::ServerError,
+                );
+            }
+
+            $this->uploadedMedia[$mediaItem->id] = (string) $mediaId;
+            // X expects media_ids as strings in the tweets payload.
+            $mediaIds[] = (string) $mediaId;
+            $this->uploadAltText((string) $mediaId, $mediaItem);
         }
 
         return $mediaIds === [] ? [] : ['media' => ['media_ids' => $mediaIds]];
@@ -293,7 +330,7 @@ class XPublisher
         }
 
         $initData = $initResponse->json();
-        $mediaId = $initData['data']['id'] ?? $initData['media_id'] ?? null;
+        $mediaId = data_get($initData, 'data.id');
 
         if (! $mediaId) {
             throw new XPublishException(
@@ -305,7 +342,7 @@ class XPublisher
         // APPEND - Read from temp file in 1MB chunks. Matches the
         // twitter-api-v2 SDK default and X's own quickstart examples;
         // larger chunks (we previously used 5MB) trigger 413 at the X
-        // edge with an empty body, surfacing as "An unknown X error".
+        // edge with an empty body.
         $chunkSize = 1024 * 1024;
         $handle = fopen($tempFile, 'r');
         $index = 0;
@@ -403,6 +440,49 @@ class XPublisher
         return null;
     }
 
+    private function isKnownMedia(string $mediaId): bool
+    {
+        $response = $this->mediaStatus($mediaId);
+
+        if (in_array($response->status(), [400, 404], true)) {
+            return false;
+        }
+
+        if ($response->serverError()) {
+            throw new PlatformUnavailableException(
+                message: "X returned {$response->status()} checking media {$mediaId}",
+                httpStatus: $response->status(),
+            );
+        }
+
+        if ($response->failed()) {
+            $this->handleApiError($response);
+        }
+
+        return true;
+    }
+
+    private function mediaStatus(string $mediaId): Response
+    {
+        try {
+            return $this->getHttpClient()
+                ->get("{$this->baseUrl}/media/upload", [
+                    'media_id' => $mediaId,
+                    'command' => 'STATUS',
+                ]);
+        } catch (ConnectionException $e) {
+            throw new PlatformUnavailableException(
+                message: "X media status check failed to connect: {$e->getMessage()}",
+                context: [
+                    PublishCheckpoint::X_MEDIA => [
+                        ...$this->uploadedMedia,
+                        ...($this->currentMediaItemId !== null ? [$this->currentMediaItemId => $mediaId] : []),
+                    ],
+                ],
+            );
+        }
+    }
+
     private function waitForProcessing(string $mediaId, int $maxAttempts = 20): void
     {
         $lastProcessingInfo = null;
@@ -410,11 +490,7 @@ class XPublisher
         for ($i = 0; $i < $maxAttempts; $i++) {
             // Official status endpoint: GET /2/media/upload?media_id=...&command=STATUS
             // (not GET /2/media/{id} — that path is not the upload-status contract).
-            $response = $this->getHttpClient()
-                ->get("{$this->baseUrl}/media/upload", [
-                    'media_id' => $mediaId,
-                    'command' => 'STATUS',
-                ]);
+            $response = $this->mediaStatus($mediaId);
 
             if ($response->failed()) {
                 Log::error('X media status check error', ['body' => $this->redactResponseBody($response->body())]);
@@ -424,8 +500,7 @@ class XPublisher
             }
 
             $responseData = $response->json();
-            $processingInfo = data_get($responseData, 'processing_info')
-                ?? data_get($responseData, 'data.processing_info');
+            $processingInfo = data_get($responseData, 'data.processing_info');
 
             // If processing_info doesn't exist, assume it's ready
             if ($processingInfo === null) {
@@ -433,13 +508,13 @@ class XPublisher
             }
 
             $lastProcessingInfo = $processingInfo;
-            $state = data_get($processingInfo, 'state', 'unknown');
+            $state = $this->processingState($processingInfo);
 
-            if ($state === 'succeeded') {
+            if ($state === MediaProcessingState::Succeeded) {
                 return;
             }
 
-            if ($state === 'failed') {
+            if ($state === MediaProcessingState::Failed) {
                 $error = data_get($processingInfo, 'error', 'Unknown error');
                 $rawError = is_string($error) ? $error : json_encode($error);
 
@@ -453,22 +528,46 @@ class XPublisher
                 );
             }
 
-            Sleep::for(max(0, (int) data_get($processingInfo, 'check_after_secs', 3)))->seconds();
+            Sleep::for(min(self::MEDIA_STATUS_MAX_WAIT_SECONDS, max(0, (int) data_get($processingInfo, 'check_after_secs', 3))))->seconds();
         }
 
-        $rawResponse = is_array($lastProcessingInfo) ? json_encode($lastProcessingInfo) : null;
+        if ($this->processingState($lastProcessingInfo)?->isProcessing() !== true) {
+            Log::error('X media processing timed out', [
+                'media_id' => $mediaId,
+                'processing_info' => $lastProcessingInfo,
+            ]);
 
-        Log::error('X media processing timed out', [
+            throw new XPublishException(
+                userMessage: 'X media processing timed out. Please try again.',
+                category: ErrorCategory::ServerError,
+                platformErrorCode: 'media-processing-timeout',
+                rawResponse: is_array($lastProcessingInfo) ? json_encode($lastProcessingInfo) : null,
+            );
+        }
+
+        Log::warning('X media still processing, publish rescheduled', [
             'media_id' => $mediaId,
             'processing_info' => $lastProcessingInfo,
         ]);
 
-        throw new XPublishException(
-            userMessage: 'X media processing timed out. Please try again.',
-            category: ErrorCategory::ServerError,
-            platformErrorCode: 'media-processing-timeout',
-            rawResponse: $rawResponse,
+        throw new PlatformUnavailableException(
+            message: "X is still processing media {$mediaId}",
+            context: [
+                PublishCheckpoint::X_MEDIA => [
+                    ...$this->uploadedMedia,
+                    ...($this->currentMediaItemId !== null ? [$this->currentMediaItemId => $mediaId] : []),
+                ],
+            ],
+            retryDelaySeconds: self::MEDIA_PROCESSING_RETRY_DELAY_SECONDS,
+            maxRetries: self::MEDIA_PROCESSING_MAX_RETRIES,
         );
+    }
+
+    private function processingState(mixed $processingInfo): ?MediaProcessingState
+    {
+        $state = data_get($processingInfo, 'state');
+
+        return is_string($state) ? MediaProcessingState::tryFrom($state) : null;
     }
 
     private function handleApiError(Response $response): never
