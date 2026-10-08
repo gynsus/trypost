@@ -89,7 +89,29 @@ test('tiktok publisher can publish video', function () {
     });
 });
 
-test('tiktok publisher persists the public video url when status omits the post id', function () {
+test('tiktok publisher keeps the public post id returned as an integer or string', function (int|string $postId) {
+    $this->postPlatform->update(['error_context' => ['tiktok_publish_id' => 'p_pub_url~123']]);
+
+    Http::fake([
+        $this->api.'/post/publish/status/fetch/' => Http::response([
+            'data' => [
+                'status' => 'PUBLISH_COMPLETE',
+                'publicaly_available_post_id' => [$postId],
+            ],
+        ]),
+    ]);
+
+    $result = $this->publisher->publish($this->postPlatform->fresh());
+
+    expect($result['id'])->toBe('7694308097568836885')
+        ->and($result['url'])->toBe('https://www.tiktok.com/@tiktoker/video/7694308097568836885');
+    Http::assertSentCount(1);
+})->with([
+    'integer id' => 7694308097568836885,
+    'string id' => '7694308097568836885',
+]);
+
+test('tiktok publisher persists the public video url when status omits the post id', function (array $statusData) {
     $this->post->update([
         'content' => 'Construam produtos globais e faturem em dólar.',
         'media' => [[
@@ -109,7 +131,7 @@ test('tiktok publisher persists the public video url when status omits the post 
         $this->api.'/post/publish/status/fetch/' => Http::response([
             'data' => [
                 'status' => 'PUBLISH_COMPLETE',
-                'publicaly_available_post_id' => [],
+                ...$statusData,
             ],
         ], 200),
         $this->api.'/video/list/*' => Http::response([
@@ -129,7 +151,13 @@ test('tiktok publisher persists the public video url when status omits the post 
 
     expect($result['id'])->toBe('7682891910226234644')
         ->and($result['url'])->toBe('https://www.tiktok.com/@tiktoker/video/7682891910226234644');
-});
+})->with([
+    'empty list' => [['publicaly_available_post_id' => []]],
+    'missing field' => [[]],
+    'null id' => [['publicaly_available_post_id' => [null]]],
+    'empty id' => [['publicaly_available_post_id' => ['']]],
+    'blank id' => [['publicaly_available_post_id' => ['   ']]],
+]);
 
 test('tiktok publisher does not report success before processing completes', function () {
     $this->post->update([

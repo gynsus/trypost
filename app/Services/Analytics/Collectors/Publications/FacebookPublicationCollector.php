@@ -55,6 +55,7 @@ class FacebookPublicationCollector extends AbstractMetaPublicationCollector
             $permalink = data_get($row, 'permalink_url');
 
             $videoId = $this->isVideo($attachment) ? data_get($attachment, 'target.id') : null;
+            $photoId = $this->isSinglePhotoPost($row, $attachment) ? data_get($attachment, 'target.id') : null;
 
             if (filled($videoId)) {
                 $hydrated = $this->hydratePreview($account, (string) $videoId);
@@ -70,7 +71,11 @@ class FacebookPublicationCollector extends AbstractMetaPublicationCollector
                 permalink: $permalink,
                 excerpt: data_get($row, 'message'),
                 previewMetadata: $this->preview($previewUrl),
-                providerMetadata: filled($videoId) ? ['video_id' => (string) $videoId] : null,
+                providerMetadata: match (true) {
+                    filled($videoId) => ['video_id' => (string) $videoId],
+                    filled($photoId) => ['photo_id' => (string) $photoId],
+                    default => null,
+                },
             );
         }
 
@@ -99,6 +104,17 @@ class FacebookPublicationCollector extends AbstractMetaPublicationCollector
     private function isVideo(array $attachment): bool
     {
         return in_array($this->contentType($attachment), [PublicationContentType::Video, PublicationContentType::Reel], true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @param  array<string, mixed>  $attachment
+     */
+    private function isSinglePhotoPost(array $row, array $attachment): bool
+    {
+        return data_get($row, 'status_type') === 'added_photos'
+            && $this->contentType($attachment) === PublicationContentType::Image
+            && blank(data_get($attachment, 'subattachments.data'));
     }
 
     /** @return array<string, mixed> */

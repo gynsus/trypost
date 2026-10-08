@@ -18,7 +18,9 @@ use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Services\Social\ContentSanitizer;
 use App\Support\PostHistoryRetention;
+use App\Support\Social\PublishCheckpoint;
 use App\Support\Social\ThreadProgress;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -148,10 +150,11 @@ class ImportExternalPosts
 
     private static function tryPostTarget(SocialAccount $account, AnalyticsPublication $publication): ?PostPlatform
     {
-        $remoteIds = array_values(array_filter([
+        $remoteIds = collect([
             $publication->remote_id,
             $account->platform === Platform::Facebook ? data_get($publication->provider_metadata, 'video_id') : null,
-        ], fn (mixed $id): bool => is_string($id) && $id !== ''));
+            $account->platform === Platform::Facebook ? data_get($publication->provider_metadata, 'photo_id') : null,
+        ])->filter(fn (mixed $id): bool => is_string($id) && filled($id))->values()->all();
 
         return PostPlatform::query()
             ->where('social_account_id', $account->id)
@@ -181,22 +184,25 @@ class ImportExternalPosts
      * back (an Instagram container id, a TikTok publish_id). The one sent post
      * from this channel with the same text near the same time is that
      * publication: it takes over the remote id instead of a duplicate import.
-     * More than one such post is ambiguous, so the publication waits.
+     * Multiple candidates, captionless Instagram posts and Instagram publishes
+     * still in progress wait without claiming a remote id.
      */
     private static function claimedBySentPost(SocialAccount $account, AnalyticsPublication $publication): bool
     {
-        $targets = self::sentPostsMatching($account, $publication);
+        $targets = self::matchingTryPostTargets($account, $publication);
 
         if ($targets->isEmpty()) {
             return false;
         }
 
-        if ($targets->count() > 1) {
+        if ($targets->count() > 1
+            || blank(Str::squish((string) $publication->excerpt))
+            || $targets->contains(fn (PostPlatform $target): bool => $target->status !== PostPlatformStatus::Published)) {
             if (! Cache::add("import-external-posts:ambiguous:{$publication->id}", true, now()->addDay())) {
                 return true;
             }
 
-            Log::warning('External publication matches more than one TryPost post; not imported.', [
+            Log::warning('External publication identity is ambiguous; not imported.', [
                 'analytics_publication_id' => $publication->id,
                 'post_platform_ids' => $targets->modelKeys(),
             ]);
@@ -224,12 +230,12 @@ class ImportExternalPosts
     /**
      * @return Collection<int, PostPlatform>
      */
-    private static function sentPostsMatching(SocialAccount $account, AnalyticsPublication $publication): Collection
+    private static function matchingTryPostTargets(SocialAccount $account, AnalyticsPublication $publication): Collection
     {
         $window = (int) config('trypost.external_posts.match_window_minutes');
         $text = Str::squish((string) $publication->excerpt);
 
-        if ($window < 1 || $text === '' || ! in_array($account->platform, self::PROVISIONAL_ID_PLATFORMS, true)) {
+        if ($window < 1 || ! in_array($account->platform, self::PROVISIONAL_ID_PLATFORMS, true)) {
             return new Collection;
         }
 
@@ -238,9 +244,8 @@ class ImportExternalPosts
         return PostPlatform::query()
             ->where('social_account_id', $account->id)
             ->enabled()
-            ->published()
+            ->where(fn (Builder $query): Builder => self::matchingPublicationState($query, $account->platform, $publishedAt, $window))
             ->whereIn('content_type', self::compatibleContentTypes(ContentType::fromPublication($account->platform, $publication->content_type)))
-            ->whereBetween('published_at', [$publishedAt->subMinutes($window), $publishedAt->addMinutes($window)])
             ->whereHas('post', fn (Builder $post): Builder => $post->createdInTryPost()->where('workspace_id', $account->workspace_id))
             ->where(fn (Builder $query): Builder => $query
                 ->whereDoesntHave('analyticsPublication')
@@ -250,13 +255,37 @@ class ImportExternalPosts
                     ->whereColumn('analytics_publications.remote_id', 'post_platforms.platform_post_id')))
             ->with(['post:id,content', 'analyticsPublication'])
             ->get()
-            ->filter(fn (PostPlatform $target): bool => self::sameText((string) $target->post?->content, $text, $account->platform))
+            ->filter(fn (PostPlatform $target): bool => self::sameText(
+                $target->content_type->isCaptionless() ? '' : (string) $target->post?->content,
+                $text,
+                $account->platform,
+            ))
             ->values();
+    }
+
+    private static function matchingPublicationState(Builder $query, Platform $platform, CarbonImmutable $publishedAt, int $window): Builder
+    {
+        $interval = [$publishedAt->subMinutes($window), $publishedAt->addMinutes($window)];
+
+        $query->where(fn (Builder $sent): Builder => $sent->published()->whereBetween('published_at', $interval));
+
+        if (! in_array($platform, [Platform::Instagram, Platform::InstagramFacebook], true)) {
+            return $query;
+        }
+
+        return $query->orWhere(fn (Builder $pending): Builder => $pending
+            ->whereBetween('updated_at', $interval)
+            ->where(fn (Builder $state): Builder => $state
+                ->where('status', PostPlatformStatus::Publishing)
+                ->orWhere(fn (Builder $retry): Builder => $retry
+                    ->where('status', PostPlatformStatus::Retrying)
+                    ->whereNotNull('error_context->'.PublishCheckpoint::INSTAGRAM_WORKFLOW.'->container_id'))));
     }
 
     /**
      * Instagram reports a feed video TryPost published as a reel, so feed and
      * reel stand in for each other; a story only ever matches a story.
+     * TikTok's video/list also returns photo posts without a media type.
      *
      * @return list<ContentType>
      */
@@ -264,6 +293,7 @@ class ImportExternalPosts
     {
         return match ($type) {
             ContentType::InstagramFeed, ContentType::InstagramReel => [ContentType::InstagramFeed, ContentType::InstagramReel],
+            ContentType::TikTokVideo => [ContentType::TikTokVideo, ContentType::TikTokPhoto],
             default => [$type],
         };
     }
@@ -271,24 +301,25 @@ class ImportExternalPosts
     /**
      * Equal text, or a network excerpt that visibly ends in an ellipsis and
      * still carries enough of the caption to tell posts apart.
+     * Empty Instagram captions are candidates for deferral only.
      */
     private static function sameText(string $content, string $text, Platform $platform): bool
     {
         $sent = Str::squish(app(ContentSanitizer::class)->displayText($content, $platform));
 
-        if ($sent === '') {
-            return false;
+        if (blank($sent)) {
+            return blank($text) && in_array($platform, [Platform::Instagram, Platform::InstagramFacebook], true);
         }
 
         if ($sent === $text) {
             return true;
         }
 
-        $truncated = trim((string) preg_replace('/(?:\.\.\.|…)$/u', '', $text));
+        $truncated = (string) Str::of($text)->chopEnd(['...', '…'])->trim();
 
         return $truncated !== $text
-            && mb_strlen($truncated) >= self::MIN_TRUNCATED_MATCH_LENGTH
-            && str_starts_with($sent, $truncated);
+            && Str::length($truncated) >= self::MIN_TRUNCATED_MATCH_LENGTH
+            && Str::startsWith($sent, $truncated);
     }
 
     private static function createPost(SocialAccount $account, AnalyticsPublication $publication): PostPlatform
