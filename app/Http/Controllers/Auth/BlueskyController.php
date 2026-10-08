@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Auth;
 
+use App\Dto\BlueskySession;
 use App\Enums\SocialAccount\Platform as SocialPlatform;
+use App\Exceptions\SocialAccount\ConnectFlowException;
+use App\Models\SocialAccount;
 use App\Services\Social\BlueskyLexicon;
 use App\Support\Social\PendingConnection;
 use Exception;
@@ -51,6 +54,10 @@ class BlueskyController extends SocialController
 
         $service = config('trypost.platforms.bluesky.default_service');
 
+        if (PendingConnection::current()?->platform() !== $this->platform) {
+            $this->rememberConnectSession($request, $workspace);
+        }
+
         try {
             // Authenticate with Bluesky
             $response = Http::post("{$service}/xrpc/".BlueskyLexicon::CREATE_SESSION, [
@@ -67,33 +74,39 @@ class BlueskyController extends SocialController
                 throw ValidationException::withMessages(['password' => __('accounts.bluesky.invalid_credentials')]);
             }
 
-            $data = $response->json();
+            $session = BlueskySession::fromResponse($response);
+
+            if ($session === null || ! $session->hasTokens()) {
+                return $this->failConnection('error_connecting');
+            }
+
+            if ($session->emailConfirmed !== true) {
+                return $this->failConnection($session->emailConfirmed === false
+                    ? 'bluesky_email_unconfirmed'
+                    : 'error_connecting');
+            }
 
             // Get profile
-            $profileResponse = Http::withToken(data_get($data, 'accessJwt'))
+            $profileResponse = Http::withToken($session->accessToken)
                 ->get("{$service}/xrpc/".BlueskyLexicon::GET_PROFILE, [
-                    'actor' => data_get($data, 'did'),
+                    'actor' => $session->did,
                 ]);
 
             $profile = $profileResponse->successful() ? $profileResponse->json() : [];
 
-            if (PendingConnection::current()?->platform() !== $this->platform) {
-                $this->rememberConnectSession($request, $workspace);
-            }
-
             return $this->offerIdentities($workspace, [
                 PendingConnection::identity(
                     $this->platform,
-                    (string) data_get($data, 'did'),
-                    data_get($profile, 'displayName') ?: data_get($data, 'handle'),
-                    data_get($data, 'handle'),
+                    $session->did,
+                    data_get($profile, 'displayName') ?: $session->handle,
+                    $session->handle,
                     data_get($profile, 'avatar'),
                     $this->platform->identityType()->value,
                     [
-                        'username' => data_get($data, 'handle'),
-                        'display_name' => data_get($profile, 'displayName', data_get($data, 'handle')),
-                        'access_token' => data_get($data, 'accessJwt'),
-                        'refresh_token' => data_get($data, 'refreshJwt'),
+                        'username' => $session->handle,
+                        'display_name' => data_get($profile, 'displayName', $session->handle),
+                        'access_token' => $session->accessToken,
+                        'refresh_token' => $session->refreshToken,
                         'token_expires_at' => now()->addHours(2),
                         'meta' => [
                             'service' => $service,
@@ -113,5 +126,27 @@ class BlueskyController extends SocialController
 
             throw ValidationException::withMessages(['password' => __('accounts.bluesky.connection_error')]);
         }
+    }
+
+    protected function accountValues(array $identity, ?SocialAccount $reconnect): array
+    {
+        $response = Http::withToken(data_get($identity, 'attributes.access_token'))
+            ->connectTimeout(10)
+            ->timeout(30)
+            ->get(config('trypost.platforms.bluesky.default_service').'/xrpc/'.BlueskyLexicon::GET_SESSION);
+
+        $session = BlueskySession::fromResponse($response);
+
+        if ($session === null || $session->did !== data_get($identity, 'platform_user_id')) {
+            throw new ConnectFlowException('error_connecting', $this->platform);
+        }
+
+        if ($session->emailConfirmed !== true) {
+            throw new ConnectFlowException($session->emailConfirmed === false
+                ? 'bluesky_email_unconfirmed'
+                : 'error_connecting', $this->platform);
+        }
+
+        return parent::accountValues($identity, $reconnect);
     }
 }

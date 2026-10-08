@@ -444,8 +444,10 @@ class BlueskyPublisher
      *   4. poll app.bsky.video.getJobStatus until the blob is ready,
      *      retrying the whole upload a few times on a transient transcode failure.
      *
-     * Returns null on failure so mediaEmbed stops publication. Only a link
-     * preview thumbnail may be omitted when its upload fails.
+     * Returns null on other failures so mediaEmbed stops publication. Only a
+     * link preview thumbnail may be omitted when its upload fails.
+     *
+     * @throws BlueskyPublishException when the account email is unconfirmed.
      */
     private function uploadVideo(SocialAccount $account, string $service, string $url, ?string $mimeType): ?array
     {
@@ -510,6 +512,8 @@ class BlueskyPublisher
             }
 
             return null;
+        } catch (BlueskyPublishException $e) {
+            throw $e;
         } catch (Throwable $e) {
             Log::error('Bluesky video upload exception', [
                 'error' => $e->getMessage(),
@@ -554,6 +558,10 @@ class BlueskyPublisher
         // A re-upload of identical bytes returns 409 with the already-finished
         // job, whose blob we can embed directly.
         if ($response->failed() && $response->status() !== 409) {
+            if (BlueskyPublishException::isEmailUnconfirmed($response)) {
+                throw BlueskyPublishException::fromApiResponse($response);
+            }
+
             Log::error('Bluesky video upload failed', [
                 'status' => $response->status(),
                 'body' => $this->redactResponseBody($response->body()),
