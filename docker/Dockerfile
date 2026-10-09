@@ -53,10 +53,13 @@ RUN apk add --no-cache \
         pcntl \
         intl \
         sockets \
-    && pecl channel-update pecl.php.net \
-    && pecl install redis \
-    && printf "\\n" | pecl install imagick \
-    && docker-php-ext-enable redis imagick \
+    && curl -fsSL -o /usr/local/bin/install-php-extensions \
+        https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions \
+    && chmod +x /usr/local/bin/install-php-extensions \
+    # pecl.php.net is winding down its REST interface, so `pecl install`
+    # fails with "does not have REST info xml available" on fresh images;
+    # install-php-extensions fetches the sources from GitHub instead.
+    && install-php-extensions redis imagick \
     && apk del $PHPIZE_DEPS \
     && rm -rf /tmp/* /var/cache/apk/*
 
