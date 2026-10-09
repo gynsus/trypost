@@ -207,7 +207,7 @@ test('authenticated users hitting the login page are sent to the calendar', func
     $user = \App\Models\User::factory()->create();
     $workspace = \App\Models\Workspace::factory()->create(['user_id' => $user->id]);
     $user->update(['current_workspace_id' => $workspace->id]);
-    $workspace->members()->attach($user->id, ['role' => \App\Enums\UserWorkspace\Role::Member->value]);
+    $workspace->members()->attach($user->id, membershipPivot('member'));
 
     $this->actingAs($user)
         ->get(route('login'))
