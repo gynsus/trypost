@@ -53,6 +53,7 @@ RUN apk add --no-cache \
         pcntl \
         intl \
         sockets \
+    && pecl channel-update pecl.php.net \
     && pecl install redis \
     && printf "\\n" | pecl install imagick \
     && docker-php-ext-enable redis imagick \
