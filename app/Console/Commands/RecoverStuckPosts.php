@@ -40,6 +40,7 @@ class RecoverStuckPosts extends Command
                 $stalePlatforms = $post->postPlatforms()
                     ->enabled()
                     ->whereIn('status', [PlatformStatus::Publishing, PlatformStatus::Pending, PlatformStatus::Retrying])
+                    ->whereNull('retry_at')
                     ->where('updated_at', '<=', now()->subHour())
                     ->get();
 
@@ -81,6 +82,8 @@ class RecoverStuckPosts extends Command
                 }
 
                 app(FinalizePostPublication::class)->handle($post);
+
+                $stalePlatforms->each(fn (PostPlatform $postPlatform) => PostPlatformStatusUpdated::dispatch($postPlatform->fresh()));
             });
     }
 

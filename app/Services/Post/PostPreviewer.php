@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace App\Services\Post;
 
+use App\Enums\SocialAccount\Platform;
 use App\Models\Post;
 use App\Models\PostPlatform;
 use App\Services\Social\ContentSanitizer;
+use App\Support\ThreadReplies;
+use App\Support\YouTubeDescription;
+use App\Support\YouTubeMetadata;
 use Illuminate\Support\Collection;
 
 /**
@@ -31,7 +35,10 @@ class PostPreviewer
      *         sanitized_content: string,
      *         sanitized_length: int,
      *         max_content_length: int,
-     *         truncated: bool
+     *         truncated: bool,
+     *         description?: string,
+     *         description_length_bytes?: int,
+     *         thread_replies?: list<array{text: string, media: list<array<string, mixed>>}>
      *     }>
      * }
      */
@@ -59,15 +66,33 @@ class PostPreviewer
                 $platform = $pp->socialAccount?->platform ?? $pp->platform;
                 $sanitized = $this->sanitizer->sanitize($original, $platform);
 
-                return [
+                $preview = [
                     'post_platform_id' => $pp->id,
                     'platform' => $platform->value,
                     'content_type' => $pp->content_type?->value,
                     'sanitized_content' => $sanitized,
                     'sanitized_length' => mb_strlen($sanitized),
-                    'max_content_length' => $platform->maxContentLength(),
+                    'max_content_length' => $pp->socialAccount?->maxContentLength() ?? $platform->maxContentLength(),
                     'truncated' => mb_strlen($sanitized) < mb_strlen($original),
                 ];
+
+                if ($platform === Platform::YouTube) {
+                    $description = YouTubeDescription::resolve($pp->meta, $sanitized);
+                    $preview['title'] = YouTubeMetadata::title($pp->meta, $sanitized);
+                    $preview['description'] = $description;
+                    $preview['description_length_bytes'] = strlen($description);
+                }
+
+                $replies = ThreadReplies::supports($platform) ? ThreadReplies::of($pp->meta) : [];
+
+                if ($replies !== []) {
+                    $preview['thread_replies'] = array_map(fn (array $reply): array => [
+                        'text' => $this->sanitizer->sanitize($reply['text'], $platform),
+                        'media' => $reply['media'],
+                    ], $replies);
+                }
+
+                return $preview;
             });
     }
 }

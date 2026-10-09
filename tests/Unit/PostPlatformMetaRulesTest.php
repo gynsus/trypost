@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Enums\GoogleBusiness\TopicType;
 use App\Enums\SocialAccount\Platform;
 use App\Enums\TikTok\PrivacyLevel;
+use App\Rules\ContentFitsPlatformLimits;
 use App\Support\PostPlatformMetaRules;
 use Illuminate\Support\Facades\Validator;
 
@@ -18,26 +19,40 @@ test('custom meta messages only cover pinterest title and link', function () {
     ]);
 });
 
-test('custom meta attributes only rename pinterest title and link', function () {
+test('custom meta attributes use translated field names', function () {
     expect(PostPlatformMetaRules::attributes())->toBe([
         'platforms.*.meta.title' => __('posts.form.pinterest.title'),
+        'platforms.*.meta.description' => __('posts.form.youtube.description'),
         'platforms.*.meta.link' => __('posts.form.pinterest.link'),
         'platforms.*.meta.event.title' => __('posts.form.google_business.event_title'),
         'platforms.*.meta.call_to_action.url' => __('posts.form.google_business.cta_url'),
     ]);
 });
 
+test('shared description validation rejects multibyte overflow', function () {
+    $validator = Validator::make(['platforms' => [['meta' => ['description' => str_repeat('é', 2501)]]]], PostPlatformMetaRules::rules());
+    expect($validator->fails())->toBeTrue()
+        ->and($validator->errors()->has('platforms.0.meta.description'))->toBeTrue();
+});
+
+test('stored youtube description is checked without requiring it for other networks', function () {
+    expect(PostPlatformMetaRules::requiredMetaViolation(Platform::YouTube, ['description' => str_repeat('a', 5001)]))
+        ->toBe(['description', __('posts.form.youtube.description_max')])
+        ->and(PostPlatformMetaRules::requiredMetaViolation(Platform::YouTube, []))->toBeNull()
+        ->and(PostPlatformMetaRules::requiredMetaViolation(Platform::Facebook, []))->toBeNull();
+});
+
 test('shared meta rules still include non-pinterest platform fields', function () {
     $rules = PostPlatformMetaRules::rules();
 
-    expect($rules)->toHaveKeys([
-        'platforms.*.meta.aspect_ratio',
-        'platforms.*.meta.privacy_level',
-        'platforms.*.meta.board_id',
-        'platforms.*.meta.channel_id',
-        'platforms.*.meta.title',
-        'platforms.*.meta.link',
-    ]);
+    expect($rules)->not->toHaveKey('platforms.*.meta.aspect_ratio')
+        ->and($rules)->toHaveKeys([
+            'platforms.*.meta.privacy_level',
+            'platforms.*.meta.board_id',
+            'platforms.*.meta.channel_id',
+            'platforms.*.meta.title',
+            'platforms.*.meta.link',
+        ]);
 });
 
 test('google business event topic type requires event title, start date, and end date to publish', function () {
@@ -348,3 +363,94 @@ test('google business event range matches the editor helper', function (array $e
     'same day end after start time' => [['start_date' => '2026-09-01', 'end_date' => '2026-09-01', 'start_time' => '09:00', 'end_time' => '18:00'], false],
     'later date with inverted times' => [['start_date' => '2026-09-01', 'end_date' => '2026-09-02', 'start_time' => '18:00', 'end_time' => '09:00'], false],
 ]);
+
+test('youtube title is checked only for youtube', function () {
+    expect(PostPlatformMetaRules::requiredMetaViolation(Platform::YouTube, ['title' => 'a > b']))
+        ->toBe(['title', __('posts.form.youtube.title_invalid')])
+        ->and(PostPlatformMetaRules::requiredMetaViolation(Platform::Pinterest, ['board_id' => 'b', 'title' => 'a > b']))->toBeNull();
+});
+
+test('youtube enum keys reject unknown values', function () {
+    $validator = Validator::make(['platforms' => [['meta' => [
+        'privacy_status' => 'friends',
+        'license' => 'mine',
+        'category_id' => 'music',
+    ]]]], PostPlatformMetaRules::rules());
+
+    expect($validator->errors()->keys())->toEqualCanonicalizing([
+        'platforms.0.meta.privacy_status',
+        'platforms.0.meta.license',
+        'platforms.0.meta.category_id',
+    ]);
+});
+
+test('youtube category accepts only the fixed category ids', function () {
+    $validate = fn (string $categoryId): bool => Validator::make(
+        ['platforms' => [['meta' => ['category_id' => $categoryId]]]],
+        PostPlatformMetaRules::rules(),
+    )->passes();
+
+    expect($validate('27'))->toBeTrue()
+        ->and($validate('22'))->toBeTrue()
+        ->and($validate('30'))->toBeFalse()
+        ->and($validate('44'))->toBeFalse();
+});
+
+test('the meta documentation names every youtube key', function () {
+    expect(PostPlatformMetaRules::documentation())->toContain('privacy_status', 'category_id', 'license', 'notify_subscribers', 'embeddable', 'made_for_kids', 'is_ai_generated');
+});
+
+test('youtube category accepts numeric ids', function () {
+    $validator = Validator::make(['platforms' => [['meta' => [
+        'category_id' => 27,
+    ]]]], PostPlatformMetaRules::rules());
+
+    expect($validator->passes())->toBeTrue()
+        ->and(PostPlatformMetaRules::normalize(['category_id' => 27, 'title' => 'x']))->toBe(['category_id' => '27', 'title' => 'x'])
+        ->and(PostPlatformMetaRules::normalize(['title' => 'x']))->toBe(['title' => 'x']);
+});
+
+test('the meta documentation names every youtube category', function () {
+    expect(PostPlatformMetaRules::documentation())->toContain('27=Education', '22=People & Blogs', '2=Autos & Vehicles');
+});
+
+test('youtube title format is checked regardless of publishing', function () {
+    expect(PostPlatformMetaRules::formatViolation(Platform::YouTube, ['title' => '<x>']))->toBe(['title', __('posts.form.youtube.title_invalid')])
+        ->and(PostPlatformMetaRules::formatViolation(Platform::Pinterest, ['title' => '<x>']))->toBeNull()
+        ->and(PostPlatformMetaRules::formatViolation(Platform::YouTube, ['title' => 'ok']))->toBeNull();
+});
+
+test('a mastodon content warning counts toward the post limit', function () {
+    $limit = Platform::Mastodon->maxContentLength();
+    $rule = new ContentFitsPlatformLimits(collect([Platform::Mastodon]), [['spoiler_text' => str_repeat('a', 10)]]);
+    $errors = [];
+
+    $rule->validate('content', str_repeat('b', $limit - 9), function (string $message) use (&$errors): void {
+        $errors[] = $message;
+    });
+
+    $fits = [];
+    (new ContentFitsPlatformLimits(collect([Platform::Mastodon]), [['spoiler_text' => 'CW']]))->validate('content', 'short', function (string $message) use (&$fits): void {
+        $fits[] = $message;
+    });
+    (new ContentFitsPlatformLimits(collect([Platform::Bluesky]), [['spoiler_text' => str_repeat('a', 400)]]))->validate('content', 'short', function (string $message) use (&$fits): void {
+        $fits[] = $message;
+    });
+
+    expect($errors)->toHaveCount(1)
+        ->and($fits)->toBe([])
+        ->and(Platform::Mastodon->reservedLength(['spoiler_text' => '  Hi  ']))->toBe(2)
+        ->and(Platform::Mastodon->reservedLength(['spoiler_text' => "\u{3000}\u{200B}Hi\u{00A0}"]))->toBe(2)
+        ->and(Platform::Bluesky->reservedLength(['spoiler_text' => 'Hi']))->toBe(0);
+});
+
+test('a non-string mastodon content warning reserves nothing', function () {
+    expect(Platform::Mastodon->reservedLength(['spoiler_text' => ['x']]))->toBe(0)
+        ->and(Platform::Mastodon->reservedLength(['spoiler_text' => '😀😀']))->toBe(2);
+});
+
+test('the documentation describes the youtube title as the first line of the content', function () {
+    expect(PostPlatformMetaRules::documentation())
+        ->toContain('derived from the first non-empty line of the content')
+        ->not->toContain('first sentence');
+});

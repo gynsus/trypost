@@ -2,12 +2,15 @@
 
 declare(strict_types=1);
 
+use App\Enums\Post\Status as PostStatus;
 use App\Enums\PostPlatform\ContentType;
+use App\Enums\PostPlatform\Status as PlatformStatus;
 use App\Enums\SocialAccount\Platform;
 use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\InstagramPublishException;
 use App\Exceptions\TokenExpiredException;
+use App\Jobs\PublishToSocialPlatform;
 use App\Models\Post;
 use App\Models\PostPlatform;
 use App\Models\SocialAccount;
@@ -18,6 +21,7 @@ use App\Services\Social\InstagramPublisher;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
@@ -495,8 +499,8 @@ test('instagram publisher resumes a processing carousel child without recreating
                 'processing_child_container_ids' => ['child-2'],
             ],
             'instagram_status' => 'IN_PROGRESS',
-        ])->and($exception->retryDelaySeconds)->toBe(10)
-            ->and($exception->maxRetries)->toBe(90);
+        ])->and($exception->retryDelaySeconds)->toBe(60)
+            ->and($exception->maxRetries)->toBe(120);
 
         $this->postPlatform->update(['error_context' => $exception->context]);
     }
@@ -659,13 +663,96 @@ test('instagram publisher handles media processing error', function () {
 
     expect(fn () => $this->publisher->publish($this->postPlatform))
         ->toThrow(function (InstagramPublishException $exception): void {
-            expect($exception->getMessage())->toBe('Instagram media processing failed')
+            expect($exception->getMessage())->toBe(__('posts.errors.instagram.processing_failed'))
+                ->and($exception->category)->toBe(ErrorCategory::Unknown)
                 ->and($exception->rawResponse)->toContain('Media download has failed')
                 ->and($exception->rawResponse)->toContain('ERROR');
         });
 
     Http::assertSent(fn (Request $request): bool => str_contains($request->url(), 'container-123')
         && str_contains((string) data_get($request->data(), 'fields', ''), 'status'));
+});
+
+test('instagram publisher explains a container error reported as an error subcode', function (string $status) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'ERROR', 'status' => $status]),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (InstagramPublishException $exception): void {
+            expect($exception->userMessage)->toBe('Unsupported video format. Please upload MP4 or MOV.')
+                ->and($exception->category)->toBe(ErrorCategory::MediaFormat)
+                ->and($exception->platformErrorCode)->toBe('2207026');
+        });
+})->with([
+    'bare subcode' => '2207026',
+    'padded subcode' => ' 2207026 ',
+]);
+
+test('instagram publisher never reads a subcode out of a container status sentence', function (string $status, ?string $code) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'ERROR', 'status' => $status]),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (InstagramPublishException $exception) use ($status, $code): void {
+            expect($exception->userMessage)->toBe(__('posts.errors.instagram.processing_failed'))
+                ->and($exception->userMessage)->not->toContain($status)
+                ->and($exception->category)->toBe(ErrorCategory::Unknown)
+                ->and($exception->platformErrorCode)->toBe($code);
+        });
+})->with([
+    'subcode in a sentence' => ['Error: Media upload has failed with error code 2207026', null],
+    'unmapped bare subcode' => ['2207999', '2207999'],
+]);
+
+test('instagram publisher says processing failed when the container gives no reason', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'ERROR']),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(fn (InstagramPublishException $exception) => expect($exception->userMessage)
+            ->toBe(__('posts.errors.instagram.processing_failed')));
 });
 
 test('instagram publisher resumes media processing without creating another container', function () {
@@ -707,8 +794,8 @@ test('instagram publisher resumes media processing without creating another cont
                 'container_id' => 'container-123',
             ],
             'instagram_status' => 'IN_PROGRESS',
-        ])->and($exception->retryDelaySeconds)->toBe(10)
-            ->and($exception->maxRetries)->toBe(90);
+        ])->and($exception->retryDelaySeconds)->toBe(60)
+            ->and($exception->maxRetries)->toBe(120);
 
         $this->postPlatform->update(['error_context' => $exception->context]);
     }
@@ -755,6 +842,92 @@ test('instagram publisher does not publish a container that never finishes proce
 
     Http::assertNotSent(fn ($request) => str_contains($request->url(), '/media_publish'));
 });
+
+test('instagram retries long interruptions without abandoning or duplicating the container', function (int $minutes, string $interruption, bool $recovers) {
+    Queue::fake();
+    $this->freezeTime();
+    $startedAt = now();
+    $availableAt = $startedAt->copy()->addMinutes($minutes);
+    $workflow = ['stage' => 'final_container', 'container_id' => 'container-123'];
+    $this->post->update(['status' => PostStatus::Publishing]);
+    $this->postPlatform->update(['error_context' => ['instagram_workflow' => $workflow]]);
+
+    Http::fake(function (Request $request) use ($availableAt, $interruption, $recovers) {
+        $unavailable = ! $recovers || now()->lt($availableAt);
+
+        if (str_contains($request->url(), '/container-123')) {
+            if ($unavailable && $interruption === 'connection') {
+                throw new ConnectionException('Instagram is unreachable');
+            }
+
+            if ($unavailable && $interruption === 'status') {
+                return Http::response(['error' => ['code' => 2, 'is_transient' => true]], 503);
+            }
+
+            return Http::response(['status_code' => $unavailable && $interruption === 'processing' ? 'IN_PROGRESS' : 'FINISHED']);
+        }
+
+        if (str_ends_with($request->url(), '/media_publish')) {
+            if ($unavailable && $interruption === 'publish') {
+                return Http::response(['error' => ['code' => 2, 'is_transient' => true]], 503);
+            }
+
+            return Http::response(['id' => 'media-123456789']);
+        }
+
+        if (str_contains($request->url(), '/media-123456789')) {
+            return Http::response(['permalink' => 'https://www.instagram.com/p/ABC123/']);
+        }
+
+        throw new RuntimeException('Unexpected Instagram request: '.$request->url());
+    });
+
+    $job = new PublishToSocialPlatform($this->postPlatform);
+
+    for ($minute = 0; $minute < $minutes; $minute++) {
+        $job->handle();
+
+        expect($this->postPlatform->refresh()->status)->toBe(PlatformStatus::Retrying)
+            ->and($this->postPlatform->error_context['instagram_workflow'])->toBe($workflow)
+            ->and($this->postPlatform->error_context['processing_retry_count'])->toBe($minute + 1);
+
+        $job = Queue::pushed(PublishToSocialPlatform::class)->last();
+
+        expect($job->uniqueAttempt)->toBe($minute + 1)
+            ->and($job->delay->equalTo(now()->addMinute()))->toBeTrue();
+
+        $this->travelTo($job->delay);
+
+        if ($minute >= 59) {
+            $this->artisan('social:recover-stuck-posts')->assertSuccessful();
+
+            expect($this->postPlatform->refresh()->status)->toBe(PlatformStatus::Retrying)
+                ->and($this->post->refresh()->status)->toBe(PostStatus::Publishing);
+        }
+    }
+
+    expect(now()->equalTo($availableAt))->toBeTrue();
+    $job->handle();
+
+    expect($this->postPlatform->refresh()->status)->toBe($recovers ? PlatformStatus::Published : PlatformStatus::Failed)
+        ->and($this->post->refresh()->status)->toBe($recovers ? PostStatus::Published : PostStatus::Failed);
+    Queue::assertPushed(PublishToSocialPlatform::class, $minutes);
+    Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), '/media'));
+    expect(Http::recorded(fn (Request $request, $response) => str_ends_with($request->url(), '/media_publish')
+        && $response->successful()))->toHaveCount($recovers ? 1 : 0);
+
+    if (! $recovers) {
+        expect($this->postPlatform->error_message)->toBe(__('posts.errors.platform_unavailable_exhausted'))
+            ->and($this->postPlatform->error_context['instagram_workflow'])->toBe($workflow);
+    }
+})->with([
+    'processing for 30 minutes' => [30, 'processing', true],
+    'status unavailable for over an hour' => [61, 'status', true],
+    'connection unavailable for over an hour' => [61, 'connection', true],
+    'publish unavailable for over an hour' => [61, 'publish', true],
+    'ready on the last retry' => [120, 'processing', true],
+    'still processing after two hours' => [120, 'processing', false],
+]);
 
 test('instagram publisher retries a transient Graph rate-limit on container status', function (int $code) {
     $this->post->update([
@@ -822,6 +995,92 @@ test('instagram publisher retries a transient Graph failure on media_publish', f
     expect(fn () => $this->publisher->publish($this->postPlatform))
         ->toThrow(function (PlatformUnavailableException $exception): void {
             expect($exception->httpStatus)->toBe(500)
+                ->and($exception->context)->toBe([
+                    'instagram_workflow' => [
+                        'stage' => 'final_container',
+                        'container_id' => 'container-123',
+                    ],
+                ]);
+        });
+});
+
+test('instagram publisher fails at once on a documented rejection sent under a transient Graph code', function (string $edge, int $code, int $subcode, ErrorCategory $category) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $rejection = Http::response(['error' => ['message' => 'Rejected', 'code' => $code, 'error_subcode' => $subcode]], 400);
+
+    Http::fake([
+        'https://graph.instagram.com/v25.0/ig_123456789/media' => $edge === 'media' ? $rejection : Http::response(['id' => 'container-123']),
+        'https://graph.instagram.com/v25.0/container-123*' => Http::response(['status_code' => 'FINISHED']),
+        'https://graph.instagram.com/v25.0/ig_123456789/media_publish' => $rejection,
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (InstagramPublishException $exception) use ($subcode, $category): void {
+            expect($exception->platformErrorCode)->toBe((string) $subcode)
+                ->and($exception->category)->toBe($category);
+        });
+})->with([
+    'activity restricted on media_publish' => ['media_publish', 4, 2207051, ErrorCategory::ContentPolicy],
+    'thumbnail offset on the container' => ['media', 1, 2207057, ErrorCategory::MediaFormat],
+]);
+
+test('instagram publisher still retries a documented server subcode sent under a transient Graph code', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    Http::fake([
+        'https://graph.instagram.com/v25.0/ig_123456789/media' => Http::response(['error' => ['message' => 'Server error', 'code' => 2, 'error_subcode' => 2207001]], 500),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))->toThrow(PlatformUnavailableException::class);
+});
+
+test('instagram publisher waits for a container media_publish reports as not ready yet', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    $graph = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'FINISHED']),
+        "{$graph}/ig_123456789/media_publish" => Http::response([
+            'error' => [
+                'message' => 'Media ID is not available',
+                'type' => 'OAuthException',
+                'code' => 9007,
+                'error_subcode' => 2207027,
+                'error_user_msg' => 'The media is not ready for publishing, please wait for a moment',
+            ],
+        ], 400),
+    ]);
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(function (PlatformUnavailableException $exception): void {
+            expect($exception->httpStatus)->toBe(400)
                 ->and($exception->context)->toBe([
                     'instagram_workflow' => [
                         'stage' => 'final_container',
@@ -1026,7 +1285,7 @@ test('instagram publisher fails a resumed container that reports ERROR', functio
 
     expect(fn () => $this->publisher->publish($this->postPlatform->fresh()))
         ->toThrow(function (InstagramPublishException $exception): void {
-            expect($exception->getMessage())->toBe('Instagram media processing failed')
+            expect($exception->getMessage())->toBe(__('posts.errors.instagram.processing_failed'))
                 ->and($exception->rawResponse)->toContain('Media download has failed');
         });
 
@@ -1651,76 +1910,6 @@ test('instagram publisher handles publish failure', function () {
         ->toThrow(Exception::class);
 });
 
-test('feed image is cropped to chosen aspect ratio before publishing', function (string $aspectRatio, float $expected) {
-    Storage::fake();
-
-    $this->postPlatform->update(['meta' => ['aspect_ratio' => $aspectRatio]]);
-
-    $this->post->update([
-        'media' => [
-            [
-                'id' => 'test-media-id',
-                'path' => 'media/test.jpg',
-                'url' => 'https://example.com/media/test.jpg',
-                'mime_type' => 'image/jpeg',
-                'original_filename' => 'test.jpg',
-            ],
-        ],
-    ]);
-
-    Http::fake([
-        'https://example.com/media/test.jpg' => Http::response(fakeJpegBytes(1200, 800), 200),
-        'https://graph.instagram.com/v25.0/ig_123456789/media' => Http::response(['id' => 'container-123'], 200),
-        'https://graph.instagram.com/v25.0/container-123*' => Http::response(['status_code' => 'FINISHED'], 200),
-        'https://graph.instagram.com/v25.0/ig_123456789/media_publish' => Http::response(['id' => 'media-1'], 200),
-        'https://graph.instagram.com/v25.0/media-1*' => Http::response(['permalink' => 'https://www.instagram.com/p/X/'], 200),
-    ]);
-
-    $this->publisher->publish($this->postPlatform);
-
-    $cropped = collect(Storage::allFiles())->first(fn (string $path) => str_starts_with($path, 'social-crops/'));
-    expect($cropped)->not->toBeNull();
-
-    $manager = new ImageManager(Driver::class);
-    $tempFile = tempnam(sys_get_temp_dir(), 'verify_');
-    file_put_contents($tempFile, Storage::get($cropped));
-    $image = $manager->decodePath($tempFile);
-    expect(abs($image->width() / $image->height() - $expected))->toBeLessThan(0.01);
-    @unlink($tempFile);
-
-    Http::assertSent(function ($request) {
-        if (! str_ends_with($request->url(), '/ig_123456789/media')) {
-            return false;
-        }
-        $imageUrl = $request['image_url'] ?? '';
-
-        return str_contains($imageUrl, 'social-crops/')
-            && ! str_contains($imageUrl, 'example.com/media/test.jpg');
-    });
-})->with([
-    '1:1' => ['1:1', 1.0],
-    '4:5' => ['4:5', 4 / 5],
-    '16:9' => ['16:9', 16 / 9],
-]);
-
-test('feed image throws when the source image cannot be downloaded for cropping', function () {
-    Storage::fake();
-
-    $this->postPlatform->update(['meta' => ['aspect_ratio' => '4:5']]);
-    $this->post->update([
-        'media' => [
-            ['id' => 'm1', 'path' => 'media/a.jpg', 'url' => 'https://example.com/media/a.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'a.jpg'],
-        ],
-    ]);
-
-    Http::fake([
-        'https://example.com/media/a.jpg' => Http::response('', 404),
-    ]);
-
-    expect(fn () => $this->publisher->publish($this->postPlatform))
-        ->toThrow(InstagramPublishException::class, 'Failed to download image for cropping');
-});
-
 test('story image throws when the source image cannot be downloaded for fitting', function () {
     Storage::fake();
 
@@ -1739,59 +1928,10 @@ test('story image throws when the source image cannot be downloaded for fitting'
         ->toThrow(InstagramPublishException::class, 'Failed to download image for story fitting');
 });
 
-test('feed image throws a clean exception when the crop source is not decodable', function () {
+test('feed image publishes the original url and ignores a legacy aspect ratio', function (string $legacyRatio) {
     Storage::fake();
 
-    $this->postPlatform->update(['meta' => ['aspect_ratio' => '4:5']]);
-    $this->post->update([
-        'media' => [
-            ['id' => 'm1', 'path' => 'media/a.jpg', 'url' => 'https://example.com/media/a.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'a.jpg'],
-        ],
-    ]);
-
-    Http::fake([
-        'https://example.com/media/a.jpg' => Http::response('<html>error</html>', 200, ['Content-Type' => 'text/html']),
-    ]);
-
-    expect(fn () => $this->publisher->publish($this->postPlatform))
-        ->toThrow(InstagramPublishException::class, 'Failed to process image for cropping');
-});
-
-test('instagram publisher does not leak the cropped temp file when hosting the feed image fails', function () {
-    $this->postPlatform->update(['meta' => ['aspect_ratio' => '4:5']]);
-
-    $this->post->update([
-        'media' => [
-            ['id' => 'm1', 'path' => 'media/a.jpg', 'url' => 'https://example.com/media/a.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'a.jpg'],
-        ],
-    ]);
-
-    Http::fake([
-        'https://example.com/media/a.jpg' => Http::response(fakeJpegBytes(1200, 800), 200),
-    ]);
-
-    $croppedPath = null;
-    $mockOptimizer = Mockery::mock(MediaOptimizer::class);
-    $mockOptimizer->shouldReceive('cropToAspectRatio')->once()->andReturnUsing(function (string $tempFile) use (&$croppedPath) {
-        $croppedPath = tempnam(sys_get_temp_dir(), 'media_crop_');
-        copy($tempFile, $croppedPath);
-
-        return $croppedPath;
-    });
-    app()->instance(MediaOptimizer::class, $mockOptimizer);
-
-    Storage::shouldReceive('put')->once()->andThrow(new RuntimeException('disk full'));
-
-    expect(fn () => $this->publisher->publish($this->postPlatform))->toThrow(RuntimeException::class);
-
-    expect($croppedPath)->not->toBeNull()
-        ->and(file_exists($croppedPath))->toBeFalse();
-});
-
-test('feed image with original aspect ratio bypasses crop', function () {
-    Storage::fake();
-
-    $this->postPlatform->update(['meta' => ['aspect_ratio' => 'original']]);
+    $this->postPlatform->update(['meta' => ['aspect_ratio' => $legacyRatio]]);
 
     $this->post->update([
         'media' => [
@@ -1823,6 +1963,48 @@ test('feed image with original aspect ratio bypasses crop', function () {
 
         return ($request['image_url'] ?? '') === 'https://example.com/media/test.jpg';
     });
+    Http::assertNotSent(fn ($request) => $request->url() === 'https://example.com/media/test.jpg');
+})->with([
+    'legacy 1:1' => ['1:1'],
+    'legacy 4:5' => ['4:5'],
+    'legacy 16:9' => ['16:9'],
+    'legacy original' => ['original'],
+]);
+
+test('carousel images publish their original urls and ignore a legacy aspect ratio', function () {
+    Storage::fake();
+
+    $this->postPlatform->update(['meta' => ['aspect_ratio' => '1:1']]);
+    $this->post->update([
+        'media' => [
+            ['id' => 'm1', 'path' => 'media/a.jpg', 'url' => 'https://example.com/media/a.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'a.jpg'],
+            ['id' => 'm2', 'path' => 'media/b.jpg', 'url' => 'https://example.com/media/b.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'b.jpg'],
+        ],
+    ]);
+
+    Http::fake([
+        'https://graph.instagram.com/v25.0/ig_123456789/media' => Http::sequence()
+            ->push(['id' => 'child-1'], 200)
+            ->push(['id' => 'child-2'], 200)
+            ->push(['id' => 'carousel-container-123'], 200),
+        'https://graph.instagram.com/v25.0/carousel-container-123*' => Http::response(['status_code' => 'FINISHED'], 200),
+        'https://graph.instagram.com/v25.0/ig_123456789/media_publish' => Http::response(['id' => 'carousel-1'], 200),
+        'https://graph.instagram.com/v25.0/carousel-1*' => Http::response(['permalink' => 'https://www.instagram.com/p/C1/'], 200),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    $childUrls = collect(Http::recorded())
+        ->map(fn (array $pair) => $pair[0])
+        ->filter(fn ($request) => str_ends_with($request->url(), '/ig_123456789/media') && ($request['is_carousel_item'] ?? null) === 'true')
+        ->map(fn ($request) => $request['image_url'])
+        ->values()
+        ->all();
+
+    expect($childUrls)->toBe(['https://example.com/media/a.jpg', 'https://example.com/media/b.jpg'])
+        ->and(Storage::allFiles())->toBeEmpty();
+    Http::assertNotSent(fn ($request) => str_starts_with($request->url(), 'https://example.com/'));
+
 });
 
 test('feed image without aspect_ratio meta uses original URL', function () {
@@ -1859,50 +2041,6 @@ test('feed image without aspect_ratio meta uses original URL', function () {
         return ($request['image_url'] ?? '') === 'https://example.com/media/test.jpg';
     });
 });
-
-test('carousel applies the chosen aspect ratio crop to every image', function (string $aspectRatio, float $expected) {
-    Storage::fake();
-
-    $this->postPlatform->update(['meta' => ['aspect_ratio' => $aspectRatio]]);
-
-    $this->post->update([
-        'media' => [
-            ['id' => 'm1', 'path' => 'media/a.jpg', 'url' => 'https://example.com/media/a.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'a.jpg'],
-            ['id' => 'm2', 'path' => 'media/b.jpg', 'url' => 'https://example.com/media/b.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'b.jpg'],
-        ],
-    ]);
-
-    Http::fake([
-        'https://example.com/media/a.jpg' => Http::response(fakeJpegBytes(1600, 900), 200),
-        'https://example.com/media/b.jpg' => Http::response(fakeJpegBytes(900, 1600), 200),
-        'https://graph.instagram.com/v25.0/ig_123456789/media' => Http::sequence()
-            ->push(['id' => 'child-1'], 200)
-            ->push(['id' => 'child-2'], 200)
-            ->push(['id' => 'carousel-1'], 200),
-        'https://graph.instagram.com/v25.0/child-1*' => Http::response(['status_code' => 'FINISHED'], 200),
-        'https://graph.instagram.com/v25.0/child-2*' => Http::response(['status_code' => 'FINISHED'], 200),
-        'https://graph.instagram.com/v25.0/carousel-1*' => Http::response(['status_code' => 'FINISHED'], 200),
-        'https://graph.instagram.com/v25.0/ig_123456789/media_publish' => Http::response(['id' => 'media-1'], 200),
-        'https://graph.instagram.com/v25.0/media-1*' => Http::response(['permalink' => 'https://www.instagram.com/p/X/'], 200),
-    ]);
-
-    $this->publisher->publish($this->postPlatform);
-
-    $crops = collect(Storage::allFiles())->filter(fn (string $path) => str_starts_with($path, 'social-crops/'));
-    expect($crops)->toHaveCount(2);
-
-    $manager = new ImageManager(Driver::class);
-    foreach ($crops as $cropPath) {
-        $tempFile = tempnam(sys_get_temp_dir(), 'verify_');
-        file_put_contents($tempFile, Storage::get($cropPath));
-        $image = $manager->decodePath($tempFile);
-        expect(abs($image->width() / $image->height() - $expected))->toBeLessThan(0.01);
-        @unlink($tempFile);
-    }
-})->with([
-    '1:1' => ['1:1', 1.0],
-    '4:5' => ['4:5', 4 / 5],
-]);
 
 test('instagram publisher sends capped alt text on single image container', function () {
     $longAlt = str_repeat('a', 1500);
@@ -2050,4 +2188,352 @@ test('instagram publisher keeps links intact', function () {
     Http::assertSent(fn ($request) => str_contains($request->url(), '/ig_123456789/media')
         && ! str_contains($request->url(), 'media_publish')
         && data_get($request->data(), 'caption') === 'New post: https://acme.com/blog');
+});
+
+test('instagram publisher sends user tags on a single image container', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+            'meta' => ['user_tags' => [['username' => '@paulocastellano', 'x' => 0.25, 'y' => 0.75]]],
+        ]],
+    ]);
+
+    Http::fake([
+        '*/ig_123456789/media' => Http::response(['id' => 'container-123'], 200),
+        '*/container-123*' => Http::response(['status_code' => 'FINISHED'], 200),
+        '*/ig_123456789/media_publish' => Http::response(['id' => 'media-tags-123'], 200),
+        '*/media-tags-123*' => Http::response(['permalink' => 'https://www.instagram.com/p/TAGS123/'], 200),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/ig_123456789/media')
+        && json_decode((string) data_get($request->data(), 'user_tags'), true) === [
+            ['username' => 'paulocastellano', 'x' => 0.25, 'y' => 0.75],
+        ]);
+});
+
+test('instagram publisher omits user tags when an image has none', function () {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-id',
+            'path' => 'media/2026-01/test-image.jpg',
+            'url' => 'https://example.com/media/2026-01/test-image.jpg',
+            'mime_type' => 'image/jpeg',
+            'original_filename' => 'test.jpg',
+        ]],
+    ]);
+
+    Http::fake([
+        '*/ig_123456789/media' => Http::response(['id' => 'container-123'], 200),
+        '*/container-123*' => Http::response(['status_code' => 'FINISHED'], 200),
+        '*/ig_123456789/media_publish' => Http::response(['id' => 'media-no-tags'], 200),
+        '*/media-no-tags*' => Http::response(['permalink' => 'https://www.instagram.com/p/NOTAGS/'], 200),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/ig_123456789/media')
+        && ! array_key_exists('user_tags', $request->data()));
+});
+
+test('instagram publisher sends user tags on each tagged carousel image', function () {
+    $this->post->update([
+        'media' => [
+            [
+                'id' => 'tagged-image',
+                'path' => 'media/2026-01/tagged.jpg',
+                'url' => 'https://example.com/media/2026-01/tagged.jpg',
+                'mime_type' => 'image/jpeg',
+                'meta' => ['user_tags' => [['username' => 'trypost.it', 'x' => 0.5, 'y' => 0.5]]],
+            ],
+            [
+                'id' => 'untagged-image',
+                'path' => 'media/2026-01/untagged.jpg',
+                'url' => 'https://example.com/media/2026-01/untagged.jpg',
+                'mime_type' => 'image/jpeg',
+            ],
+        ],
+    ]);
+
+    Http::fake([
+        '*/ig_123456789/media' => Http::sequence()
+            ->push(['id' => 'child-1'], 200)
+            ->push(['id' => 'child-2'], 200)
+            ->push(['id' => 'carousel-container-123'], 200),
+        '*/carousel-container-123*' => Http::response(['status_code' => 'FINISHED'], 200),
+        '*/ig_123456789/media_publish' => Http::response(['id' => 'carousel-tags-123'], 200),
+        '*/carousel-tags-123*' => Http::response(['permalink' => 'https://www.instagram.com/p/CAROUSELTAGS/'], 200),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn ($request) => str_contains((string) data_get($request->data(), 'image_url'), 'tagged.jpg')
+        && ! str_contains((string) data_get($request->data(), 'image_url'), 'untagged.jpg')
+        && json_decode((string) data_get($request->data(), 'user_tags'), true) === [
+            ['username' => 'trypost.it', 'x' => 0.5, 'y' => 0.5],
+        ]);
+    Http::assertSent(fn ($request) => str_contains((string) data_get($request->data(), 'image_url'), 'untagged.jpg')
+        && ! array_key_exists('user_tags', $request->data()));
+});
+
+test('instagram publisher mentions story tags by username only', function () {
+    Storage::fake();
+    $this->postPlatform->update(['content_type' => ContentType::InstagramStory]);
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-story',
+            'path' => 'media/2026-01/story.jpg',
+            'url' => 'https://example.com/media/2026-01/story.jpg',
+            'mime_type' => 'image/jpeg',
+            'meta' => ['user_tags' => [['username' => 'paulocastellano', 'x' => 0.1, 'y' => 0.9]]],
+        ]],
+    ]);
+
+    $mockOptimizer = Mockery::mock(MediaOptimizer::class);
+    $mockOptimizer->shouldReceive('fitToCanvas')->once()->andReturnUsing(function (string $tempFile) {
+        $out = tempnam(sys_get_temp_dir(), 'ig_fit_');
+        copy($tempFile, $out);
+
+        return $out;
+    });
+    app()->instance(MediaOptimizer::class, $mockOptimizer);
+
+    Http::fake([
+        '*/ig_123456789/media' => Http::response(['id' => 'story-container-123'], 200),
+        '*/story-container-123*' => Http::response(['status_code' => 'FINISHED'], 200),
+        '*/ig_123456789/media_publish' => Http::response(['id' => 'story-tags-123'], 200),
+        '*/story-tags-123*' => Http::response(['permalink' => 'https://www.instagram.com/stories/testuser/123/'], 200),
+        '*' => Http::response(file_get_contents(__DIR__.'/../../../fixtures/1x1.png'), 200, ['Content-Type' => 'image/png']),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/ig_123456789/media')
+        && json_decode((string) data_get($request->data(), 'user_tags'), true) === [['username' => 'paulocastellano']]);
+});
+
+test('instagram reel sends the chosen cover frame as thumb_offset in milliseconds', function (?int $coverOffsetMs) {
+    $this->postPlatform->update(['content_type' => ContentType::InstagramReel]);
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-video',
+            'path' => 'media/2026-01/test-video.mp4',
+            'url' => 'https://example.com/media/2026-01/test-video.mp4',
+            'mime_type' => 'video/mp4',
+            'original_filename' => 'test.mp4',
+            'meta' => array_filter(['duration' => 10, 'cover_offset_ms' => $coverOffsetMs], fn (mixed $value): bool => $value !== null),
+        ]],
+    ]);
+    $graph = Platform::Instagram->instagramGraphBaseUrl();
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::response(['id' => 'container-123']),
+        "{$graph}/container-123*" => Http::response(['status_code' => 'FINISHED']),
+        "{$graph}/ig_123456789/media_publish" => Http::response(['id' => 'reel-123']),
+        "{$graph}/reel-123*" => Http::response(['permalink' => 'https://www.instagram.com/reel/ABC/']),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn (Request $request): bool => $request->url() === "{$graph}/ig_123456789/media"
+        && data_get($request->data(), 'media_type') === 'REELS'
+        && data_get($request->data(), 'thumb_offset') === $coverOffsetMs);
+})->with([
+    'offset of 1.5 s' => [1500],
+    'no offset' => [null],
+]);
+
+test('instagram carousel video child sends its cover frame as thumb_offset', function () {
+    $this->post->update([
+        'media' => [
+            [
+                'id' => 'test-media-image',
+                'path' => 'media/2026-01/test-image.jpg',
+                'url' => 'https://example.com/media/2026-01/test-image.jpg',
+                'mime_type' => 'image/jpeg',
+                'original_filename' => 'test.jpg',
+            ],
+            [
+                'id' => 'test-media-video',
+                'path' => 'media/2026-01/test-video.mp4',
+                'url' => 'https://example.com/media/2026-01/test-video.mp4',
+                'mime_type' => 'video/mp4',
+                'original_filename' => 'test.mp4',
+                'meta' => ['duration' => 10, 'cover_offset_ms' => 2500],
+            ],
+        ],
+    ]);
+    $graph = Platform::Instagram->instagramGraphBaseUrl();
+
+    Http::fake([
+        "{$graph}/ig_123456789/media" => Http::sequence()
+            ->push(['id' => 'child-1'])
+            ->push(['id' => 'child-2'])
+            ->push(['id' => 'carousel-123']),
+        "{$graph}/child-2*" => Http::response(['status_code' => 'FINISHED']),
+        "{$graph}/carousel-123*" => Http::response(['status_code' => 'FINISHED']),
+        "{$graph}/ig_123456789/media_publish" => Http::response(['id' => 'carousel-published']),
+        "{$graph}/carousel-published*" => Http::response(['permalink' => 'https://www.instagram.com/p/CAR/']),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn (Request $request): bool => data_get($request->data(), 'media_type') === 'VIDEO'
+        && data_get($request->data(), 'thumb_offset') === 2500);
+    Http::assertNotSent(fn (Request $request): bool => data_get($request->data(), 'image_url') !== null
+        && data_get($request->data(), 'thumb_offset') !== null);
+});
+
+function fakeInstagramReelFlow(): void
+{
+    $base = config('trypost.platforms.instagram.graph_api');
+    Http::fake([
+        "{$base}/ig_123456789/media" => Http::response(['id' => 'container-1']),
+        "{$base}/container-1*" => Http::response(['status_code' => 'FINISHED']),
+        "{$base}/ig_123456789/media_publish" => Http::response(['id' => 'media-1']),
+        "{$base}/media-1*" => Http::response(['permalink' => 'https://www.instagram.com/reel/X/']),
+    ]);
+}
+
+function instagramVideo(): array
+{
+    return [[
+        'id' => 'video-1', 'type' => 'video', 'path' => 'media/v.mp4',
+        'url' => 'https://example.com/v.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'v.mp4',
+    ]];
+}
+
+test('instagram reel options reach the container', function () {
+    $this->post->update(['media' => instagramVideo()]);
+    $this->postPlatform->update([
+        'content_type' => ContentType::InstagramReel,
+        'meta' => [
+            'is_ai_generated' => true,
+            'share_to_feed' => false,
+        ],
+    ]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media')
+        && data_get($request->data(), 'media_type') === 'REELS'
+        && data_get($request->data(), 'is_ai_generated') === 'true'
+        && data_get($request->data(), 'share_to_feed') === 'false');
+});
+
+test('an instagram reel without options publishes exactly as before', function () {
+    $this->post->update(['media' => instagramVideo()]);
+    $this->postPlatform->update(['content_type' => ContentType::InstagramReel, 'meta' => []]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media')
+        && data_get($request->data(), 'share_to_feed') === 'true'
+        && ! array_key_exists('is_ai_generated', $request->data()));
+});
+
+test('a story sends the ai label and ignores a leftover reel option', function () {
+    $this->post->update(['media' => instagramVideo()]);
+    $this->postPlatform->update([
+        'content_type' => ContentType::InstagramStory,
+        'meta' => ['share_to_feed' => false, 'is_ai_generated' => true],
+    ]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media')
+        && data_get($request->data(), 'media_type') === 'STORIES'
+        && data_get($request->data(), 'is_ai_generated') === 'true'
+        && ! array_key_exists('share_to_feed', $request->data()));
+});
+
+test('a story without the ai label sends none', function () {
+    $this->post->update(['media' => instagramVideo()]);
+    $this->postPlatform->update(['content_type' => ContentType::InstagramStory, 'meta' => []]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media')
+        && data_get($request->data(), 'media_type') === 'STORIES'
+        && ! array_key_exists('is_ai_generated', $request->data()));
+});
+
+test('a carousel sends the ai label on the parent only', function () {
+    $this->post->update(['media' => [
+        ['id' => 'a', 'type' => 'image', 'path' => 'media/a.jpg', 'url' => 'https://example.com/a.jpg', 'mime_type' => 'image/jpeg'],
+        ['id' => 'b', 'type' => 'image', 'path' => 'media/b.jpg', 'url' => 'https://example.com/b.jpg', 'mime_type' => 'image/jpeg'],
+    ]]);
+    $this->postPlatform->update(['meta' => ['is_ai_generated' => true]]);
+    $base = config('trypost.platforms.instagram.graph_api');
+    Http::fake([
+        'https://example.com/*' => Http::response(fakeJpegBytes()),
+        "{$base}/ig_123456789/media" => Http::sequence()->push(['id' => 'child-1'])->push(['id' => 'child-2'])->push(['id' => 'parent-1']),
+        "{$base}/parent-1*" => Http::response(['status_code' => 'FINISHED']),
+        "{$base}/ig_123456789/media_publish" => Http::response(['id' => 'media-2']),
+        "{$base}/media-2*" => Http::response(['permalink' => 'https://www.instagram.com/p/Y/']),
+    ]);
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => data_get($request->data(), 'media_type') === 'CAROUSEL'
+        && data_get($request->data(), 'is_ai_generated') === 'true');
+    Http::assertNotSent(fn (Request $request): bool => data_get($request->data(), 'is_carousel_item') === 'true'
+        && array_key_exists('is_ai_generated', $request->data()));
+});
+
+test('an instagram reel sends share_to_feed false when turned off', function () {
+    $this->post->update(['media' => instagramVideo()]);
+    $this->postPlatform->update(['content_type' => ContentType::InstagramReel, 'meta' => ['share_to_feed' => false]]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media')
+        && data_get($request->data(), 'media_type') === 'REELS'
+        && data_get($request->data(), 'share_to_feed') === 'false');
+});
+
+test('a feed video sends the ai label but no reel-only options', function () {
+    $this->post->update(['media' => instagramVideo()]);
+    $this->postPlatform->update([
+        'content_type' => ContentType::InstagramFeed,
+        'meta' => ['is_ai_generated' => true, 'share_to_feed' => false],
+    ]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media')
+        && data_get($request->data(), 'media_type') === 'REELS'
+        && data_get($request->data(), 'is_ai_generated') === 'true'
+        && ! array_key_exists('share_to_feed', $request->data()));
+});
+
+test('instagram publishes a stored caption with more than five hashtags', function (ContentType $type) {
+    $this->post->update(['content' => 'Launch #a #b #c #d #e #f', 'media' => instagramVideo()]);
+    $this->postPlatform->update(['content_type' => $type]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media_publish'));
+})->with([ContentType::InstagramFeed, ContentType::InstagramReel, ContentType::InstagramStory]);
+
+test('an instagram story is not measured against the caption length', function () {
+    $this->post->update(['content' => str_repeat('a', 2300), 'media' => instagramVideo()]);
+    $this->postPlatform->update(['content_type' => ContentType::InstagramStory]);
+    fakeInstagramReelFlow();
+
+    $this->publisher->publish($this->postPlatform->fresh());
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/ig_123456789/media_publish'));
 });

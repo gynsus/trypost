@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Social\LinkCard;
 
-use App\Services\Brand\SafeHttpFetcher;
+use App\Services\Http\SafeHttpFetcher;
 use App\Support\UrlDetector;
 use Illuminate\Support\Facades\Cache;
 
@@ -18,6 +18,9 @@ class LinkCardFetcher
 {
     /** Cards for a public URL are identical for everyone; cache briefly and globally. */
     private const int CACHE_MINUTES = 10;
+
+    /** OpenGraph metadata should occur near the document head; never buffer an unbounded page. */
+    private const int MAX_HTML_BYTES = 2 * 1024 * 1024;
 
     public function __construct(
         private readonly SafeHttpFetcher $http = new SafeHttpFetcher,
@@ -46,13 +49,13 @@ class LinkCardFetcher
 
     private function build(string $url): ?LinkCardMetadata
     {
-        $response = $this->http->tryGet($url);
+        $html = $this->http->tryGetBody($url, self::MAX_HTML_BYTES);
 
-        if ($response === null) {
+        if ($html === null) {
             return null;
         }
 
-        $meta = $this->extractor->extract($response->body(), $url);
+        $meta = $this->extractor->extract($html, $url);
         $title = data_get($meta, 'title');
         $description = data_get($meta, 'description');
 

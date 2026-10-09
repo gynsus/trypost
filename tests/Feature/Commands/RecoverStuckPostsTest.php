@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Enums\Post\Status as PostStatus;
 use App\Enums\PostPlatform\Status as PlatformStatus;
 use App\Enums\SocialAccount\Platform;
+use App\Events\PostPlatformStatusUpdated;
 use App\Jobs\PublishToSocialPlatform;
 use App\Jobs\ReconcileGoogleBusinessPost;
 use App\Jobs\SendNotification;
@@ -57,6 +58,33 @@ test('it recovers posts stuck in publishing for over 1 hour', function () {
         'category' => 'timeout',
     ]);
     expect($post->status)->toBe(PostStatus::Failed);
+});
+
+test('it broadcasts the timed out target so open publish pages move the post to sent', function () {
+    Event::fake([PostPlatformStatusUpdated::class]);
+
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'user_id' => $this->user->id,
+        'status' => PostStatus::Publishing,
+        'updated_at' => now()->subHours(2),
+    ]);
+
+    $platform = PostPlatform::factory()->create([
+        'post_id' => $post->id,
+        'social_account_id' => $this->socialAccount->id,
+        'status' => PlatformStatus::Publishing,
+        'enabled' => true,
+        'updated_at' => now()->subHours(2),
+    ]);
+
+    $this->artisan('social:recover-stuck-posts')->assertSuccessful();
+
+    Event::assertDispatched(
+        PostPlatformStatusUpdated::class,
+        fn (PostPlatformStatusUpdated $event): bool => $event->postPlatform->is($platform)
+            && $event->postPlatform->status === PlatformStatus::Failed,
+    );
 });
 
 test('it does not touch posts publishing for less than 1 hour', function () {

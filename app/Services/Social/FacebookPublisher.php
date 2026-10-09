@@ -12,9 +12,10 @@ use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\FacebookPublishException;
 use App\Exceptions\Social\SocialPublishException;
 use App\Models\PostPlatform;
-use App\Services\Social\Concerns\CropsImageForAspectRatio;
+use App\Services\Social\Concerns\FitsImageToCanvas;
 use App\Services\Social\Concerns\HasSocialHttpClient;
 use App\Services\Social\Meta\GraphError;
+use App\Support\FacebookLinkPreview;
 use Closure;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
@@ -25,7 +26,7 @@ use Illuminate\Support\Sleep;
 
 class FacebookPublisher
 {
-    use CropsImageForAspectRatio;
+    use FitsImageToCanvas;
     use HasSocialHttpClient;
 
     private const int VIDEO_UPLOAD_POLL_SECONDS = 5;
@@ -57,8 +58,8 @@ class FacebookPublisher
 
         return match ($contentType) {
             ContentType::FacebookReel => $this->publishReel($pageId, $accessToken, $content, $this->requireVideo($media->first(), 'Reels')),
-            ContentType::FacebookStory => $this->publishStory($pageId, $accessToken, $this->requireVideo($media->first(), 'Stories')),
-            ContentType::FacebookPost => $this->publishPost($pageId, $accessToken, $content, $media, data_get($postPlatform->meta, 'aspect_ratio')),
+            ContentType::FacebookStory => $this->publishStory($pageId, $accessToken, $this->requireMedia($media->first(), 'Stories')),
+            ContentType::FacebookPost => $this->publishPost($pageId, $accessToken, $content, $media, $postPlatform->attachesLinkPreview()),
             default => throw new FacebookPublishException(
                 userMessage: "Unsupported Facebook content type: {$contentType?->value}",
                 category: ErrorCategory::MediaFormat,
@@ -70,18 +71,18 @@ class FacebookPublisher
      * @param  Collection<int, MediaItem>  $media
      * @return array{id: mixed, url: string}
      */
-    private function publishPost(string $pageId, string $accessToken, ?string $content, Collection $media, ?string $aspectRatio): array
+    private function publishPost(string $pageId, string $accessToken, ?string $content, Collection $media, bool $attachLink): array
     {
         if ($media->isEmpty()) {
-            return $this->publishTextPost($pageId, $accessToken, $content);
+            return $this->publishTextPost($pageId, $accessToken, $content, $attachLink);
         }
 
         $firstMedia = $media->first();
 
         return match (true) {
             $firstMedia->isVideo() => $this->publishVideoPost($pageId, $accessToken, $content, $firstMedia),
-            $firstMedia->isImage() && $media->count() === 1 => $this->publishSingleImagePost($pageId, $accessToken, $content, $firstMedia, $aspectRatio),
-            $firstMedia->isImage() => $this->publishMultiImagePost($pageId, $accessToken, $content, $media, $aspectRatio),
+            $firstMedia->isImage() && $media->count() === 1 => $this->publishSingleImagePost($pageId, $accessToken, $content, $firstMedia),
+            $firstMedia->isImage() => $this->publishMultiImagePost($pageId, $accessToken, $content, $media),
             default => throw new FacebookPublishException(
                 userMessage: 'Unsupported media type for Facebook',
                 category: ErrorCategory::MediaFormat,
@@ -92,7 +93,7 @@ class FacebookPublisher
     /**
      * @return array{id: mixed, url: string}
      */
-    private function publishTextPost(string $pageId, string $accessToken, ?string $content): array
+    private function publishTextPost(string $pageId, string $accessToken, ?string $content, bool $attachLink): array
     {
         if (! filled($content)) {
             throw new FacebookPublishException(
@@ -101,21 +102,67 @@ class FacebookPublisher
             );
         }
 
-        $response = $this->postToGraph("{$pageId}/feed", [
-            'message' => $content,
-            'access_token' => $accessToken,
-        ], 'text post');
+        $link = $attachLink ? FacebookLinkPreview::url($content) : null;
+
+        $response = $link === null
+            ? $this->postTextToFeed($pageId, $accessToken, $content, null)
+            : $this->postTextWithLink($pageId, $accessToken, $content, $link);
 
         return $this->feedPostResult(data_get($response->json(), 'id'));
     }
 
     /**
+     * Facebook can reject the link and not the post: 1609005 (scrape failed),
+     * 1500 (invalid URL) or 200/1609008 (facebook.com URL). The caption
+     * published as plain text before `link` existed, so on those codes the
+     * card is dropped and the text is posted once more. Any other error fails
+     * the post. The first attempt stays quiet in the log because only the
+     * outcome of the retry says whether the publish failed.
+     */
+    private function postTextWithLink(string $pageId, string $accessToken, string $content, string $link): Response
+    {
+        try {
+            return $this->postTextToFeed($pageId, $accessToken, $content, $link, reportFailure: false);
+        } catch (FacebookPublishException $exception) {
+            if (! $exception->rejectsLink()) {
+                Log::error('Facebook text post failed', [
+                    'platform_error_code' => $exception->platformErrorCode,
+                    'body' => $this->redactResponseBody($exception->rawResponse ?? ''),
+                ]);
+
+                throw $exception;
+            }
+
+            Log::warning('Facebook rejected the link preview; publishing the text without it', [
+                'platform_error_code' => $exception->platformErrorCode,
+                'platform_error_subcode' => $exception->platformErrorSubcode,
+            ]);
+        }
+
+        return $this->postTextToFeed($pageId, $accessToken, $content, null);
+    }
+
+    /**
+     * A text post carries `link` when the caption contains a URL. Facebook does
+     * not unfurl a URL left only in `message`; the Page Feed `link` field is
+     * what makes it scrape Open Graph and render the preview.
+     */
+    private function postTextToFeed(string $pageId, string $accessToken, string $content, ?string $link, bool $reportFailure = true): Response
+    {
+        return $this->postToGraph("{$pageId}/feed", [
+            'message' => $content,
+            'access_token' => $accessToken,
+            ...$this->optionalField('link', $link),
+        ], 'text post', $reportFailure);
+    }
+
+    /**
      * @return array{id: mixed, url: string}
      */
-    private function publishSingleImagePost(string $pageId, string $accessToken, ?string $content, MediaItem $media, ?string $aspectRatio): array
+    private function publishSingleImagePost(string $pageId, string $accessToken, ?string $content, MediaItem $media): array
     {
         $response = $this->postToGraph("{$pageId}/photos", [
-            'url' => $this->cropImageForAspectRatio($media->url, $aspectRatio),
+            'url' => $media->url,
             'access_token' => $accessToken,
             ...$this->optionalField('message', $content),
             ...$this->altText($media),
@@ -134,11 +181,11 @@ class FacebookPublisher
      * @param  Collection<int, MediaItem>  $media
      * @return array{id: mixed, url: string}
      */
-    private function publishMultiImagePost(string $pageId, string $accessToken, ?string $content, Collection $media, ?string $aspectRatio): array
+    private function publishMultiImagePost(string $pageId, string $accessToken, ?string $content, Collection $media): array
     {
         $photoIds = $media
             ->filter(fn (MediaItem $item): bool => $item->isImage())
-            ->map(fn (MediaItem $item): ?string => $this->uploadUnpublishedPhoto($pageId, $accessToken, $item, $aspectRatio))
+            ->map(fn (MediaItem $item): ?string => $this->uploadUnpublishedPhoto($pageId, $accessToken, $item))
             ->filter()
             ->values();
 
@@ -160,11 +207,11 @@ class FacebookPublisher
         return $this->feedPostResult(data_get($response->json(), 'id'));
     }
 
-    private function uploadUnpublishedPhoto(string $pageId, string $accessToken, MediaItem $media, ?string $aspectRatio): ?string
+    private function uploadUnpublishedPhoto(string $pageId, string $accessToken, MediaItem $media, ?string $url = null): ?string
     {
         $response = $this->reachOrRetry(
             fn (): Response => $this->facebookHttp()->post("{$this->baseUrl}/{$pageId}/photos", [
-                'url' => $this->cropImageForAspectRatio($media->url, $aspectRatio),
+                'url' => $url ?? $media->url,
                 'published' => 'false',
                 'access_token' => $accessToken,
                 ...$this->altText($media),
@@ -233,6 +280,10 @@ class FacebookPublisher
      */
     private function publishStory(string $pageId, string $accessToken, MediaItem $media): array
     {
+        if ($media->isImage()) {
+            return $this->publishPhotoStory($pageId, $accessToken, $media);
+        }
+
         $videoId = $this->uploadVideo($pageId, $accessToken, 'video_stories', $media);
 
         $response = $this->postToGraph("{$pageId}/video_stories", [
@@ -242,6 +293,41 @@ class FacebookPublisher
         ], 'story finish');
 
         $storyId = data_get($response->json(), 'post_id') ?? $videoId;
+
+        return [
+            'id' => $storyId,
+            'url' => "https://www.facebook.com/stories/{$pageId}/{$storyId}",
+        ];
+    }
+
+    /**
+     * A photo story is an unpublished Page photo handed to `photo_stories`
+     * (https://developers.facebook.com/docs/page-stories-api/). The image is
+     * fitted into the 9:16 story frame first, like Instagram stories, so an
+     * off-ratio photo is not cropped by the network.
+     *
+     * @return array{id: mixed, url: string}
+     */
+    private function publishPhotoStory(string $pageId, string $accessToken, MediaItem $media): array
+    {
+        $dimensions = ContentType::FacebookStory->preferredImageDimensions();
+        $fittedUrl = $this->fitImageToCanvas($media->url, data_get($dimensions, 'width'), data_get($dimensions, 'height'));
+
+        $photoId = $this->uploadUnpublishedPhoto($pageId, $accessToken, $media, $fittedUrl);
+
+        if ($photoId === null) {
+            throw new FacebookPublishException(
+                userMessage: 'Facebook could not upload the story photo.',
+                category: ErrorCategory::ServerError,
+            );
+        }
+
+        $response = $this->postToGraph("{$pageId}/photo_stories", [
+            'photo_id' => $photoId,
+            'access_token' => $accessToken,
+        ], 'photo story');
+
+        $storyId = data_get($response->json(), 'post_id') ?? $photoId;
 
         return [
             'id' => $storyId,
@@ -333,6 +419,14 @@ class FacebookPublisher
             Log::error('Facebook video upload failed', [
                 'body' => $this->redactResponseBody($response->body()),
             ]);
+
+            if (FacebookPublishException::isRetryableUpload($response)) {
+                throw new PlatformUnavailableException(
+                    message: "Facebook video upload failed with {$response->status()}",
+                    httpStatus: $response->status(),
+                );
+            }
+
             $this->handleApiError($response);
         }
 
@@ -428,6 +522,26 @@ class FacebookPublisher
             || in_array(data_get($status, 'video_status'), ['ready', 'upload_complete'], true);
     }
 
+    private function requireMedia(?MediaItem $media, string $format): MediaItem
+    {
+        if ($media === null || (! $media->isVideo() && ! $media->isImage())) {
+            throw new FacebookPublishException(
+                userMessage: "Facebook {$format} require an image or a video file.",
+                category: ErrorCategory::MediaFormat,
+            );
+        }
+
+        return $media;
+    }
+
+    protected function cropFailureException(string $message): SocialPublishException
+    {
+        return new FacebookPublishException(
+            userMessage: $message,
+            category: ErrorCategory::ServerError,
+        );
+    }
+
     private function requireVideo(?MediaItem $media, string $format): MediaItem
     {
         if ($media === null || ! $media->isVideo()) {
@@ -464,7 +578,7 @@ class FacebookPublisher
      *
      * @param  array<string, string>  $payload
      */
-    private function postToGraph(string $path, array $payload, string $label): Response
+    private function postToGraph(string $path, array $payload, string $label, bool $reportFailure = true): Response
     {
         $response = $this->reachOrRetry(
             fn (): Response => $this->facebookHttp()->post("{$this->baseUrl}/{$path}", $payload),
@@ -472,10 +586,13 @@ class FacebookPublisher
         );
 
         if ($response->failed()) {
-            Log::error("Facebook {$label} failed", [
-                'status' => $response->status(),
-                'body' => $this->redactResponseBody($response->body()),
-            ]);
+            if ($reportFailure) {
+                Log::error("Facebook {$label} failed", [
+                    'status' => $response->status(),
+                    'body' => $this->redactResponseBody($response->body()),
+                ]);
+            }
+
             $this->handleApiError($response);
         }
 
@@ -534,13 +651,5 @@ class FacebookPublisher
     private function handleApiError(Response $response): never
     {
         throw FacebookPublishException::fromApiResponse($response);
-    }
-
-    protected function cropFailureException(string $message): SocialPublishException
-    {
-        return new FacebookPublishException(
-            userMessage: $message,
-            category: ErrorCategory::ServerError,
-        );
     }
 }

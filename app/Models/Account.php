@@ -29,7 +29,6 @@ class Account extends Model
     protected $fillable = [
         'owner_id',
         'name',
-        'billing_email',
         'plan_id',
         'trial_ends_at',
     ];
@@ -73,6 +72,17 @@ class Account extends Model
         }
 
         return $this->subscribed(self::SUBSCRIPTION_NAME);
+    }
+
+    public function subscriptionStatus(): string
+    {
+        $subscription = $this->subscription(self::SUBSCRIPTION_NAME);
+
+        if (! $subscription) {
+            return 'none';
+        }
+
+        return $subscription->canceled() ? 'canceled' : $subscription->stripe_status;
     }
 
     public function hasAppAccess(): bool
@@ -174,7 +184,7 @@ class Account extends Model
 
     public function stripeEmail(): string
     {
-        return $this->billing_email ?? $this->owner?->email ?? '';
+        return $this->owner?->email ?? '';
     }
 
     public function stripeName(): string

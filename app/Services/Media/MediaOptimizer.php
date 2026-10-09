@@ -115,7 +115,9 @@ class MediaOptimizer
     }
 
     /**
-     * Center-crop an image to the given aspect ratio (width / height).
+     * Center-crop an image to the given aspect ratio (width / height), the
+     * crop the Facebook and Instagram publishers made before TryPost 2.0. Only
+     * the one-off `posts:bake-aspect-ratio-crops` release step calls it.
      * Returns path to a temp file (caller must clean up).
      */
     public function cropToAspectRatio(string $filePath, float $ratio): string
@@ -136,11 +138,9 @@ class MediaOptimizer
         }
 
         if ($current > $ratio) {
-            // Wider than target: keep height, shrink width.
             $newWidth = (int) round($height * $ratio);
             $newHeight = $height;
         } else {
-            // Taller than target: keep width, shrink height.
             $newWidth = $width;
             $newHeight = (int) round($width / $ratio);
         }
