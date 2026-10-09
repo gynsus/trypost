@@ -6,6 +6,7 @@ use App\Enums\SocialAccount\Platform;
 use App\Enums\SocialAccount\Status;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Support\Social\PendingConnection;
 use Illuminate\Support\Facades\Http;
 use Inertia\Testing\AssertableInertia;
 
@@ -55,20 +56,19 @@ test('vk connect page can be rendered', function () {
     $response->assertInertia(fn (AssertableInertia $page) => $page->component('accounts/VkConnect'));
 });
 
-test('submitting a valid token lists manageable walls', function () {
+test('submitting a valid token offers the manageable walls on the confirmation page', function () {
     Http::fake(fakeVkIdentity($this->api));
+
+    $this->actingAs($this->user)->get(route('app.social.vk.connect'));
 
     $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
         'access_token' => 'vk1.a.valid-test-token',
     ]);
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page
-        ->component('accounts/VkConnect')
-        ->has('targets', 2)
-        ->where('targets.0.owner_id', 111)
-        ->where('targets.1.owner_id', -123456)
-        ->where('targets.1.is_group', true));
+    $response->assertRedirect(route('app.social.connect.show', Platform::Vk));
+
+    expect(PendingConnection::current()->identityKeys())
+        ->toBe(['vk:111', 'vk:-123456']);
 
     $this->assertDatabaseMissing('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -79,14 +79,13 @@ test('submitting a valid token lists manageable walls', function () {
 test('user can connect a vk community wall', function () {
     Http::fake(fakeVkIdentity($this->api));
 
-    $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
-        'access_token' => 'vk1.a.valid-test-token',
-        'owner_id' => -123456,
-    ]);
+    $this->actingAs($this->user)->get(route('app.social.vk.connect'));
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page->component('accounts/PopupCallback'));
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+    $this->actingAs($this->user)->post(route('app.social.vk.store'), [
+        'access_token' => 'vk1.a.valid-test-token',
+    ])->assertRedirect(route('app.social.connect.show', Platform::Vk));
+
+    finishSocialConnect(Platform::Vk, ['vk:-123456'])->assertRedirect();
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -96,17 +95,25 @@ test('user can connect a vk community wall', function () {
         'display_name' => 'Test Community',
         'status' => Status::Connected->value,
     ]);
+
+    $account = $this->workspace->socialAccounts()->where('platform', Platform::Vk->value)->sole();
+
+    expect(data_get($account->meta, 'owner_id'))->toBe(-123456)
+        ->and(data_get($account->meta, 'is_group'))->toBeTrue()
+        ->and(data_get($account->meta, 'vk_user_id'))->toBe(111);
 });
 
-test('connecting a wall the token does not manage is rejected', function () {
+test('finish refuses a wall the token was never offered', function () {
     Http::fake(fakeVkIdentity($this->api));
 
-    $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
-        'access_token' => 'vk1.a.valid-test-token',
-        'owner_id' => -999999,
-    ]);
+    $this->actingAs($this->user)->get(route('app.social.vk.connect'));
 
-    $response->assertSessionHasErrors('owner_id');
+    $this->actingAs($this->user)->post(route('app.social.vk.store'), [
+        'access_token' => 'vk1.a.valid-test-token',
+    ])->assertRedirect(route('app.social.connect.show', Platform::Vk));
+
+    finishSocialConnect(Platform::Vk, ['vk:-999999'])
+        ->assertSessionHasErrors('identities');
 
     $this->assertDatabaseMissing('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -134,8 +141,9 @@ test('a token vk rejects surfaces the api error on the token field', function ()
 function fakeVkCommunityToken(string $api): array
 {
     return [
-        // users.get принимает ключ сообщества, но без user_ids отвечает
-        // пустым списком — так и распознаётся ключ сообщества.
+        // users.get accepts a community key too, but without user_ids it
+        // answers with an empty list — that is how a community key is told
+        // apart from a user token.
         "{$api}/users.get*" => Http::response(['response' => []], 200),
         "{$api}/groups.getById*" => Http::response([
             'response' => [
@@ -176,18 +184,17 @@ test('a community access token asks for the community address first', function (
 test('a community access token connects its community', function () {
     Http::fake(fakeVkCommunityToken($this->api));
 
-    $response = $this->actingAs($this->user)->post(route('app.social.vk.store'), [
+    $this->actingAs($this->user)->get(route('app.social.vk.connect'));
+
+    $this->actingAs($this->user)->post(route('app.social.vk.store'), [
         'access_token' => 'vk1.a.community-token',
         'community' => 'https://vk.com/njsoft',
-    ]);
-
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page
-        ->component('accounts/PopupCallback')
-        ->where('success', true));
+    ])->assertRedirect(route('app.social.connect.show', Platform::Vk));
 
     Http::assertSent(fn ($request) => str_contains($request->url(), '/groups.getById')
         && $request['group_ids'] === 'njsoft');
+
+    finishSocialConnect(Platform::Vk)->assertRedirect();
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -198,7 +205,7 @@ test('a community access token connects its community', function () {
         'status' => Status::Connected->value,
     ]);
 
-    $account = $this->workspace->socialAccounts()->where('platform', Platform::Vk->value)->first();
+    $account = $this->workspace->socialAccounts()->where('platform', Platform::Vk->value)->sole();
 
     expect(data_get($account->meta, 'community_token'))->toBeTrue()
         ->and(data_get($account->meta, 'owner_id'))->toBe(-654321)

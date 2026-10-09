@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Auth;
 
+use App\Enums\SocialAccount\IdentityType;
 use App\Enums\SocialAccount\Platform as SocialPlatform;
-use App\Enums\SocialAccount\Status;
 use App\Models\Workspace;
 use App\Services\Social\Vk\VkApi;
+use App\Support\Social\PendingConnection;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -19,9 +21,10 @@ use Inertia\Response as InertiaResponse;
  * VK connects with a user access token (scope: wall, photos, groups, video,
  * offline) instead of OAuth — VK stopped granting the `wall` scope to new
  * OAuth apps, so users bring a token from a standalone app or an approved
- * application of their own. Two-step form: the token is validated and the
- * manageable walls (own profile + administered communities) are listed, then
- * the chosen wall is stored as the account.
+ * application of their own. The token form keeps its step on the same page
+ * layout (like Bluesky and Mastodon) and ends on the shared confirmation
+ * page: a user token offers the profile wall plus administered communities,
+ * a community access token offers the one community it belongs to.
  */
 class VkController extends SocialController
 {
@@ -42,18 +45,20 @@ class VkController extends SocialController
 
         $this->authorize('manageAccounts', $workspace);
 
+        $this->rememberConnectSession($request, $workspace);
+
         return Inertia::render('accounts/VkConnect', [
             'errors' => session('errors')?->getBag('default')?->toArray() ?? [],
+            'backUrl' => PendingConnection::current()?->returnUrl() ?? PendingConnection::defaultReturnUrl(),
         ]);
     }
 
-    public function store(Request $request): InertiaResponse
+    public function store(Request $request): RedirectResponse|InertiaResponse
     {
         $this->ensurePlatformEnabled();
 
         $request->validate([
             'access_token' => 'required|string|min:10',
-            'owner_id' => 'nullable|integer',
             'community' => 'nullable|string|max:255',
         ]);
 
@@ -73,55 +78,18 @@ class VkController extends SocialController
                     return Inertia::render('accounts/VkConnect', [
                         'errors' => [],
                         'communityToken' => true,
+                        'backUrl' => PendingConnection::current()?->returnUrl() ?? PendingConnection::defaultReturnUrl(),
                     ]);
                 }
 
-                return $this->storeCommunityAccount($request, $workspace);
+                return $this->offerCommunityIdentity($request, $workspace);
             }
 
-            $targets = $this->buildTargets($request->access_token, $user);
-
-            if (! $request->filled('owner_id')) {
-                return Inertia::render('accounts/VkConnect', [
-                    'errors' => [],
-                    'targets' => array_values($targets),
-                ]);
-            }
-
-            $target = $targets[(int) $request->owner_id] ?? null;
-
-            if ($target === null) {
-                throw ValidationException::withMessages(['owner_id' => __('accounts.vk.invalid_target')]);
-            }
-
-            $avatarPath = $target['photo'] ? uploadFromUrl($target['photo']) : null;
-
-            $workspace->socialAccounts()->updateOrCreate(
-                [
-                    'platform' => $this->platform->value,
-                    'platform_user_id' => (string) $target['owner_id'],
-                ],
-                [
-                    'username' => $target['screen_name'],
-                    'display_name' => $target['name'],
-                    'avatar_url' => $avatarPath,
-                    'access_token' => $request->access_token,
-                    'refresh_token' => null,
-                    // vkhost/standalone tokens are issued with the `offline`
-                    // scope and never expire; there is no refresh flow.
-                    'token_expires_at' => null,
-                    'status' => Status::Connected,
-                    'error_message' => null,
-                    'disconnected_at' => null,
-                    'meta' => [
-                        'owner_id' => $target['owner_id'],
-                        'is_group' => $target['owner_id'] < 0,
-                        'vk_user_id' => (int) data_get($user, 'id'),
-                    ],
-                ],
+            return $this->offerIdentities(
+                $workspace,
+                $this->tokenIdentities($request->access_token, $user),
+                $this->reconnectAccount($workspace),
             );
-
-            return $this->popupCallback(true, __('accounts.popup_callback.connected'), $this->platform->value);
         } catch (ValidationException $e) {
             throw $e;
         } catch (\Exception $e) {
@@ -196,20 +164,20 @@ class VkController extends SocialController
     }
 
     /**
-     * Connect the community a community access token belongs to. VK has no
-     * API to resolve a community from its token, so the community comes from
-     * the form; groups.getCallbackConfirmationCode (callable only with the
+     * Offer the community a community access token belongs to. VK has no API
+     * to resolve a community from its token, so the community comes from the
+     * form; groups.getCallbackConfirmationCode (callable only with the
      * community's own token, unlike groups.getOnlineStatus it does not need
      * community messages to be enabled) then proves the token belongs to it.
      */
-    private function storeCommunityAccount(Request $request, Workspace $workspace): InertiaResponse
+    private function offerCommunityIdentity(Request $request, Workspace $workspace): RedirectResponse
     {
         $groups = $this->callVk($request->access_token, 'groups.getById', [
             'group_ids' => $this->normalizeCommunity((string) $request->community),
             'fields' => 'screen_name,photo_200',
         ]);
 
-        // v5.199 отдаёт response.groups[], более старые версии — response[].
+        // v5.199 returns response.groups[], older versions response[].
         $group = data_get($groups, 'groups.0') ?? data_get($groups, '0');
 
         if (! is_array($group)) {
@@ -225,54 +193,51 @@ class VkController extends SocialController
         }
 
         $ownerId = -(int) data_get($group, 'id');
-        $photo = data_get($group, 'photo_200');
 
-        $workspace->socialAccounts()->updateOrCreate(
-            [
-                'platform' => $this->platform->value,
-                'platform_user_id' => (string) $ownerId,
-            ],
-            [
-                'username' => data_get($group, 'screen_name'),
-                'display_name' => (string) data_get($group, 'name'),
-                'avatar_url' => $photo ? uploadFromUrl($photo) : null,
-                'access_token' => $request->access_token,
-                'refresh_token' => null,
-                // Community access tokens never expire; there is no refresh flow.
-                'token_expires_at' => null,
-                'status' => Status::Connected,
-                'error_message' => null,
-                'disconnected_at' => null,
-                'meta' => [
+        return $this->offerIdentities($workspace, [
+            PendingConnection::identity(
+                $this->platform,
+                (string) $ownerId,
+                (string) data_get($group, 'name'),
+                data_get($group, 'screen_name'),
+                data_get($group, 'photo_200'),
+                IdentityType::Page->value,
+                $this->accountAttributes($request->access_token, [
                     'owner_id' => $ownerId,
                     'is_group' => true,
                     'community_token' => true,
-                ],
-            ],
-        );
-
-        return $this->popupCallback(true, __('accounts.popup_callback.connected'), $this->platform->value);
+                ], data_get($group, 'screen_name'), (string) data_get($group, 'name')),
+            ),
+        ], $this->reconnectAccount($workspace));
     }
 
     /**
-     * Walls the token may publish to: the user's own profile plus communities
-     * where the user is an administrator or editor. Keyed by owner_id so the
-     * second form step can only pick something this token really manages.
+     * Walls a user token may publish to — the user's own profile plus
+     * communities where the user is an administrator or editor — as
+     * confirmation-page identities.
      *
      * @param  array<string, mixed>  $user
-     * @return array<int, array{owner_id: int, name: string, screen_name: ?string, photo: ?string, is_group: bool}>
+     * @return list<array<string, mixed>>
      */
-    private function buildTargets(string $accessToken, array $user): array
+    private function tokenIdentities(string $accessToken, array $user): array
     {
-        $targets = [];
-
         $userId = (int) data_get($user, 'id');
-        $targets[$userId] = [
-            'owner_id' => $userId,
-            'name' => trim(data_get($user, 'first_name', '').' '.data_get($user, 'last_name', '')),
-            'screen_name' => data_get($user, 'screen_name'),
-            'photo' => data_get($user, 'photo_200'),
-            'is_group' => false,
+        $userName = trim(data_get($user, 'first_name', '').' '.data_get($user, 'last_name', ''));
+
+        $identities = [
+            PendingConnection::identity(
+                $this->platform,
+                (string) $userId,
+                $userName,
+                data_get($user, 'screen_name'),
+                data_get($user, 'photo_200'),
+                IdentityType::Profile->value,
+                $this->accountAttributes($accessToken, [
+                    'owner_id' => $userId,
+                    'is_group' => false,
+                    'vk_user_id' => $userId,
+                ], data_get($user, 'screen_name'), $userName),
+            ),
         ];
 
         $groups = $this->callVk($accessToken, 'groups.get', [
@@ -284,16 +249,43 @@ class VkController extends SocialController
 
         foreach (data_get($groups, 'items', []) as $group) {
             $groupId = (int) data_get($group, 'id');
-            $targets[-$groupId] = [
-                'owner_id' => -$groupId,
-                'name' => (string) data_get($group, 'name'),
-                'screen_name' => data_get($group, 'screen_name'),
-                'photo' => data_get($group, 'photo_200'),
-                'is_group' => true,
-            ];
+
+            $identities[] = PendingConnection::identity(
+                $this->platform,
+                (string) -$groupId,
+                (string) data_get($group, 'name'),
+                data_get($group, 'screen_name'),
+                data_get($group, 'photo_200'),
+                IdentityType::Page->value,
+                $this->accountAttributes($accessToken, [
+                    'owner_id' => -$groupId,
+                    'is_group' => true,
+                    'vk_user_id' => $userId,
+                ], data_get($group, 'screen_name'), (string) data_get($group, 'name')),
+            );
         }
 
-        return $targets;
+        return $identities;
+    }
+
+    /**
+     * Column values the shared confirmation flow stores for a picked wall.
+     * vkhost/standalone and community tokens are issued with the `offline`
+     * scope and never expire; there is no refresh flow.
+     *
+     * @param  array<string, mixed>  $meta
+     * @return array<string, mixed>
+     */
+    private function accountAttributes(string $accessToken, array $meta, ?string $username, string $displayName): array
+    {
+        return [
+            'username' => $username,
+            'display_name' => $displayName,
+            'access_token' => $accessToken,
+            'refresh_token' => null,
+            'token_expires_at' => null,
+            'meta' => $meta,
+        ];
     }
 
     /**

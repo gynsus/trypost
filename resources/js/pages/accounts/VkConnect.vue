@@ -1,142 +1,104 @@
 <script setup lang="ts">
 import { useForm } from '@inertiajs/vue3';
-import { IconInfoCircle } from '@tabler/icons-vue';
-import { trans } from 'laravel-vue-i18n';
-import { computed } from 'vue';
 
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import InputError from '@/components/InputError.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { getInitials } from '@/composables/useInitials';
-import PopupLayout from '@/layouts/PopupLayout.vue';
+import ConnectLayout from '@/layouts/ConnectLayout.vue';
 import { store as storeVk } from '@/routes/app/social/vk';
 
-interface VkTarget {
-    owner_id: number;
-    name: string;
-    screen_name: string | null;
-    photo: string | null;
-    is_group: boolean;
-}
+const props = withDefaults(
+    defineProps<{
+        backUrl: string;
+        communityToken?: boolean;
+    }>(),
+    { communityToken: false },
+);
 
-const props = defineProps<{
-    targets?: VkTarget[];
-    communityToken?: boolean;
-}>();
-
-const form = useForm<{ access_token: string; owner_id: number | null; community: string }>({
+const form = useForm<{ access_token: string; community: string }>({
     access_token: '',
-    owner_id: null,
     community: '',
 });
 
-const hasTargets = computed(() => (props.targets ?? []).length > 0);
-
-const onSubmit = () => form.post(storeVk.url());
-
-const pickTarget = (target: VkTarget) => {
-    form.owner_id = target.owner_id;
+const onSubmit = (): void => {
     form.post(storeVk.url());
 };
 </script>
 
 <template>
-    <PopupLayout :title="$t('accounts.vk.title')">
-        <div class="max-w-md mx-auto">
-            <div class="flex items-center gap-3 mb-6">
-                <img src="/images/accounts/vk.png" alt="VK" class="h-10 w-10" />
-                <div>
-                    <h1 class="text-xl font-bold tracking-tight">{{ $t('accounts.vk.title') }}</h1>
-                    <p class="text-sm text-muted-foreground">{{ $t('accounts.vk.description') }}</p>
-                </div>
-            </div>
-
-            <!-- Step 2: pick the wall to publish to -->
-            <div v-if="hasTargets" class="space-y-3">
-                <Label>{{ $t('accounts.vk.pick_target') }}</Label>
-                <button
-                    v-for="target in props.targets"
-                    :key="target.owner_id"
-                    type="button"
-                    :disabled="form.processing"
-                    class="flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-accent disabled:opacity-50"
-                    @click="pickTarget(target)"
+    <ConnectLayout
+        :title="$t('accounts.vk.title')"
+        platform="vk"
+        :close-url="backUrl"
+    >
+        <div class="flex flex-col gap-6">
+            <div class="flex flex-col gap-2">
+                <h1
+                    class="text-xl leading-tight font-medium text-foreground"
+                    data-testid="connect-title"
                 >
-                    <img
-                        v-if="target.photo"
-                        :src="target.photo"
-                        :alt="target.name"
-                        class="h-10 w-10 rounded-full object-cover"
-                    />
-                    <div
-                        v-else
-                        class="flex h-10 w-10 items-center justify-center rounded-full bg-[#0077FF] font-semibold text-white"
-                    >
-                        {{ getInitials(target.name) }}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                        <div class="truncate font-medium">{{ target.name }}</div>
-                        <div class="text-sm text-muted-foreground">
-                            {{ target.is_group ? $t('accounts.vk.target_group') : $t('accounts.vk.target_profile') }}
-                        </div>
-                    </div>
-                </button>
-                <p v-if="form.errors.owner_id" class="text-sm text-destructive">
-                    {{ form.errors.owner_id }}
+                    {{ $t('accounts.vk.title') }}
+                </h1>
+                <p class="text-sm text-muted-foreground">
+                    {{ $t('accounts.vk.description') }}
                 </p>
             </div>
 
-            <!-- Step 2 (community token): the community the key belongs to -->
-            <form v-else-if="props.communityToken" @submit.prevent="onSubmit" class="space-y-4">
-                <div class="space-y-2">
-                    <Label for="community">{{ $t('accounts.vk.community') }}</Label>
-                    <Input id="community" v-model="form.community"
-                        :placeholder="trans('accounts.vk.community_placeholder')" :class="{ 'border-destructive': form.errors.community }"
+            <form class="flex flex-col gap-4" @submit.prevent="onSubmit">
+                <div class="grid gap-2">
+                    <Label for="access_token">{{
+                        $t('accounts.vk.access_token')
+                    }}</Label>
+                    <Input
+                        id="access_token"
+                        v-model="form.access_token"
+                        type="password"
+                        autocomplete="off"
+                        autofocus
+                        :placeholder="$t('accounts.vk.access_token_placeholder')"
+                        :aria-invalid="Boolean(form.errors.access_token)"
+                        data-testid="vk-access-token"
                     />
-                    <p v-if="form.errors.community" class="text-sm text-destructive">
-                        {{ form.errors.community }}
-                    </p>
-                    <p v-if="form.errors.access_token" class="text-sm text-destructive">
-                        {{ form.errors.access_token }}
-                    </p>
+                    <!-- eslint-disable-next-line vue/no-v-html — the hint carries bold/em markup from the lang file -->
+                    <p
+                        class="text-xs text-muted-foreground"
+                        v-html="$t('accounts.vk.access_token_hint')"
+                    />
+                    <InputError :message="form.errors.access_token" />
                 </div>
 
-                <Alert>
-                    <IconInfoCircle class="h-4 w-4" />
-                    <AlertDescription class="inline">
+                <div v-if="props.communityToken" class="grid gap-2">
+                    <Label for="community">{{
+                        $t('accounts.vk.community')
+                    }}</Label>
+                    <Input
+                        id="community"
+                        v-model="form.community"
+                        type="text"
+                        autocomplete="off"
+                        :placeholder="$t('accounts.vk.community_placeholder')"
+                        :aria-invalid="Boolean(form.errors.community)"
+                        data-testid="vk-community"
+                    />
+                    <p class="text-xs text-muted-foreground">
                         {{ $t('accounts.vk.community_hint') }}
-                    </AlertDescription>
-                </Alert>
-
-                <Button type="submit" :disabled="form.processing" class="w-full">
-                    {{ form.processing ? $t('accounts.vk.submitting') : $t('accounts.vk.submit') }}
-                </Button>
-            </form>
-
-            <!-- Step 1: access token -->
-            <form v-else @submit.prevent="onSubmit" class="space-y-4">
-                <div class="space-y-2">
-                    <Label for="access_token">{{ $t('accounts.vk.access_token') }}</Label>
-                    <Input id="access_token" v-model="form.access_token" type="password"
-                        :placeholder="trans('accounts.vk.access_token_placeholder')" :class="{ 'border-destructive': form.errors.access_token }"
-                    />
-                    <p v-if="form.errors.access_token" class="text-sm text-destructive">
-                        {{ form.errors.access_token }}
                     </p>
+                    <InputError :message="form.errors.community" />
                 </div>
 
-                <Alert>
-                    <IconInfoCircle class="h-4 w-4" />
-                    <AlertDescription class="inline">
-                        <span v-html="$t('accounts.vk.access_token_hint')" />
-                    </AlertDescription>
-                </Alert>
-
-                <Button type="submit" :disabled="form.processing" class="w-full">
-                    {{ form.processing ? $t('accounts.vk.submitting') : $t('accounts.vk.submit') }}
+                <Button
+                    type="submit"
+                    :disabled="form.processing"
+                    data-testid="vk-submit"
+                >
+                    {{
+                        form.processing
+                            ? $t('accounts.vk.submitting')
+                            : $t('accounts.vk.submit')
+                    }}
                 </Button>
             </form>
         </div>
-    </PopupLayout>
+    </ConnectLayout>
 </template>

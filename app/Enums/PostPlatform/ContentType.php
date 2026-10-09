@@ -459,7 +459,7 @@ enum ContentType: string
             self::ThreadsPost, self::ThreadsGhostPost => ['1:1', '4:5', '1.91:1'],
             self::BlueskyPost, self::MastodonPost => ['1:1', '16:9'],
             self::GoogleBusinessPost => ['4:3', '1:1'],
-            self::TelegramPost, self::DiscordMessage => self::defaultCropPresets(),
+            self::TelegramPost, self::DiscordMessage, self::VkPost => self::defaultCropPresets(),
         };
     }
 
