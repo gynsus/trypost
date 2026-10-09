@@ -43,8 +43,8 @@ class PinterestPublisher
             app(ConnectionVerifier::class)->refreshToken($account);
         }
 
-        $content = $postPlatform->resolvedContent()
-            ? app(ContentSanitizer::class)->sanitize($postPlatform->resolvedContent(), $postPlatform->platform)
+        $content = $postPlatform->post->content
+            ? app(ContentSanitizer::class)->sanitize($postPlatform->post->content, $postPlatform->platform)
             : null;
 
         return match ($postPlatform->content_type) {
@@ -289,11 +289,7 @@ class PinterestPublisher
             ],
         ], $postPlatform, $content);
 
-        if (! empty(data_get($postPlatform->meta, 'cover_image_url'))) {
-            $payload['media_source']['cover_image_url'] = data_get($postPlatform->meta, 'cover_image_url');
-        } else {
-            $payload['media_source']['cover_image_key_frame_time'] = 0;
-        }
+        $payload['media_source']['cover_image_key_frame_time'] = (int) round(($media->coverOffsetMs() ?? 0) / 1000);
 
         return $this->createPin($account, $payload, 'Pinterest video pin creation failed');
     }
@@ -469,6 +465,31 @@ class PinterestPublisher
             'boards' => $boards,
             'truncated' => $truncated,
         ];
+    }
+
+    /**
+     * Create a board owned by the account (POST /boards, scope boards:write).
+     *
+     * @return array<string, mixed>
+     */
+    public function createBoard(SocialAccount $account, string $name): array
+    {
+        if ($account->needsProactiveTokenRefresh()) {
+            app(ConnectionVerifier::class)->refreshToken($account);
+        }
+
+        $response = $this->socialHttp()->withToken($account->access_token)
+            ->post($this->baseUrl.'/boards', ['name' => $name]);
+
+        if ($response->failed()) {
+            Log::error('Pinterest create board failed', [
+                'status' => $response->status(),
+                'body' => $this->redactResponseBody($response->body()),
+            ]);
+            $this->handleApiError($response);
+        }
+
+        return $response->json() ?? [];
     }
 
     private function handleApiError(Response $response): never

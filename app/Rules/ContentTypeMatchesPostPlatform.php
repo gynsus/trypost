@@ -36,7 +36,7 @@ class ContentTypeMatchesPostPlatform implements DataAwareRule, ValidationRule
         $parentKey = Str::beforeLast($attribute, '.');
         $postPlatformId = data_get($this->data, $parentKey.'.id');
 
-        if (! $postPlatformId) {
+        if (! $postPlatformId || ! Str::isUuid((string) $postPlatformId)) {
             return;
         }
 

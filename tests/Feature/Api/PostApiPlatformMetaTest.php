@@ -2,18 +2,21 @@
 
 declare(strict_types=1);
 
+use App\Dto\MediaItem;
 use App\Enums\GoogleBusiness\TopicType;
 use App\Enums\Post\Status as PostStatus;
 use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
 use App\Enums\TikTok\PrivacyLevel;
 use App\Jobs\PublishPost;
+use App\Models\Media;
 use App\Models\Post;
 use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 it('youtube description survives create read update omission and clear', function (string $description) {
     $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
@@ -33,23 +36,17 @@ it('youtube description survives create read update omission and clear', functio
     expect(collect($read->json('platforms'))->firstWhere('id', $platform->id)['meta']['description'])->toBe($description);
     $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
         'status' => PostStatus::Draft->value,
-        'platforms' => [[
-            'id' => $platform->id,
-            'meta' => ['description' => str_repeat('é', 2501)],
-        ]],
+        'meta' => ['description' => str_repeat('é', 2501)],
     ])->assertUnprocessable()->assertJsonValidationErrors('platforms.0.meta.description');
     expect(data_get($platform->fresh()->meta, 'description'))->toBe($description);
     $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
         'status' => PostStatus::Draft->value,
-        'platforms' => [['id' => $platform->id]],
+        'meta' => [],
     ])->assertOk();
     expect(data_get($platform->fresh()->meta, 'description'))->toBe($description);
     $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
         'status' => PostStatus::Draft->value,
-        'platforms' => [[
-            'id' => $platform->id,
-            'meta' => ['description' => null],
-        ]],
+        'meta' => ['description' => null],
     ])->assertOk();
     expect(data_get($platform->fresh()->meta, 'description'))->toBeNull();
 })->with([
@@ -102,10 +99,7 @@ it('youtube description checks effective API metadata before scheduling or publi
     ];
 
     if ($patch !== 'omit') {
-        $data['platforms'] = [['id' => $platform->id]];
-        if ($patch !== 'row') {
-            $data['platforms'][0]['meta'] = ['description' => $patch === 'clear' ? null : 'Valid description'];
-        }
+        $data['meta'] = $patch === 'row' ? [] : ['description' => $patch === 'clear' ? null : 'Valid description'];
     }
     Queue::fake();
     $response = $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), $data);
@@ -118,7 +112,7 @@ it('youtube description checks effective API metadata before scheduling or publi
             Queue::assertPushed(PublishPost::class);
         }
     } else {
-        $response->assertUnprocessable()->assertJsonValidationErrors('platforms.0.meta.description');
+        $response->assertUnprocessable()->assertJsonValidationErrors(($data['meta'] ?? []) !== [] ? 'platforms.0.meta.description' : 'destinations.0.meta.description');
         expect($post->fresh()->status)->toBe(PostStatus::Draft);
         Queue::assertNotPushed(PublishPost::class);
     }
@@ -130,6 +124,7 @@ it('youtube description checks effective API metadata before scheduling or publi
 ])->with([PostStatus::Scheduled->value, PostStatus::Publishing->value]);
 
 beforeEach(function () {
+    Storage::fake();
     $result = createApiTestToken();
     $this->user = $result['user'];
     $this->workspace = $result['workspace'];
@@ -261,6 +256,27 @@ it('does not reject a Bluesky post whose stored video is a MOV', function () {
             'scheduled_at' => now()->addHour()->toIso8601String(),
         ])
         ->assertSuccessful();
+});
+
+it('rejects unowned media on the legacy single-platform update payload', function () {
+    $linkedin = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::LinkedIn]);
+    $post = Post::factory()->create(['workspace_id' => $this->workspace->id, 'user_id' => $this->user->id]);
+    $target = PostPlatform::factory()->linkedin()->create([
+        'post_id' => $post->id,
+        'social_account_id' => $linkedin->id,
+        'enabled' => true,
+    ]);
+
+    $this->withHeaders($this->headers)
+        ->putJson(route('api.posts.update', $post), [
+            'status' => PostStatus::Draft->value,
+            'media' => [['id' => (string) Str::uuid()]],
+            'platforms' => [['id' => $target->id]],
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['media.0.id']);
+
+    expect($post->fresh()->media)->toBeEmpty();
 });
 
 it('rejects publishing when the uploaded video runs past the content type duration cap', function () {
@@ -408,17 +424,18 @@ it('persists per-platform meta across networks on store', function () {
     $tiktok = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::TikTok]);
 
     $this->withHeaders($this->headers)
-        ->postJson(route('api.posts.store'), [
+        ->postJson(route('api.posts.batch.store'), [
+            'status' => 'draft',
             'content' => 'Cross-platform',
-            'platforms' => [
-                ['social_account_id' => $instagram->id, 'content_type' => ContentType::InstagramFeed->value, 'meta' => ['aspect_ratio' => '4:5']],
+            'destinations' => [
+                ['social_account_id' => $instagram->id, 'content_type' => ContentType::InstagramFeed->value, 'meta' => ['is_ai_generated' => true]],
                 ['social_account_id' => $pinterest->id, 'content_type' => ContentType::PinterestPin->value, 'meta' => ['board_id' => 'board-99']],
                 ['social_account_id' => $tiktok->id, 'content_type' => ContentType::TikTokVideo->value, 'meta' => ['privacy_level' => PrivacyLevel::SelfOnly->value, 'allow_comments' => true]],
             ],
         ])
         ->assertCreated();
 
-    expect(PostPlatform::where('social_account_id', $instagram->id)->sole()->meta['aspect_ratio'])->toBe('4:5')
+    expect(PostPlatform::where('social_account_id', $instagram->id)->sole()->meta['is_ai_generated'])->toBeTrue()
         ->and(PostPlatform::where('social_account_id', $pinterest->id)->sole()->meta['board_id'])->toBe('board-99')
         ->and(PostPlatform::where('social_account_id', $tiktok->id)->sole()->meta['privacy_level'])->toBe(PrivacyLevel::SelfOnly->value)
         ->and(PostPlatform::where('social_account_id', $tiktok->id)->sole()->meta['allow_comments'])->toBeTrue();
@@ -527,7 +544,11 @@ it('rejects publishing a Discord post without a channel', function () {
 it('publishes a Discord post when the channel is set', function () {
     Queue::fake();
 
-    $post = Post::factory()->create(['workspace_id' => $this->workspace->id, 'user_id' => $this->user->id]);
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'user_id' => $this->user->id,
+        'content' => 'Ready for Discord',
+    ]);
     $platform = PostPlatform::factory()->discord()->create([
         'post_id' => $post->id,
         'social_account_id' => $this->discordAccount->id,
@@ -629,7 +650,7 @@ it('rejects an out-of-range recording location latitude', function () {
         ->assertJsonValidationErrors(['platforms.0.meta.recording_location.lat']);
 });
 
-it('persists a per-platform content override and instagram location meta on store', function () {
+it('persists instagram location meta on store', function () {
     $instagram = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::Instagram]);
 
     $this->withHeaders($this->headers)
@@ -639,7 +660,6 @@ it('persists a per-platform content override and instagram location meta on stor
                 'social_account_id' => $instagram->id,
                 'content_type' => ContentType::InstagramFeed->value,
                 'meta' => [
-                    'content' => 'Instagram-only caption with #hashtags',
                     'location_id' => '106190712750250',
                     'location_name' => 'Brisbane',
                 ],
@@ -649,9 +669,8 @@ it('persists a per-platform content override and instagram location meta on stor
 
     $row = PostPlatform::where('social_account_id', $instagram->id)->sole();
 
-    expect(data_get($row->meta, 'content'))->toBe('Instagram-only caption with #hashtags')
-        ->and(data_get($row->meta, 'location_id'))->toBe('106190712750250')
-        ->and($row->resolvedContent())->toBe('Instagram-only caption with #hashtags');
+    expect(data_get($row->meta, 'location_id'))->toBe('106190712750250')
+        ->and(data_get($row->meta, 'location_name'))->toBe('Brisbane');
 });
 
 it('persists Pinterest title and link meta on store', function () {
@@ -753,6 +772,65 @@ it('rejects non-http Pinterest links', function () {
         ->assertJsonValidationErrors([
             'platforms.0.meta.link' => __('posts.form.pinterest.link_invalid'),
         ]);
+});
+
+it('rejects scheduling an independent Pinterest draft without a board when settings are omitted', function () {
+    $pinterest = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::Pinterest]);
+    $image = Media::factory()->stored()->temporaryUpload($this->workspace)->create();
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'user_id' => $this->user->id,
+        'status' => PostStatus::Draft,
+        'content' => 'A pin',
+        'media' => [MediaItem::fromMedia($image)->toArray()],
+    ]);
+    PostPlatform::factory()->create([
+        'post_id' => $post->id,
+        'social_account_id' => $pinterest->id,
+        'platform' => Platform::Pinterest,
+        'content_type' => ContentType::PinterestPin,
+        'meta' => [],
+    ]);
+
+    $this->withHeaders($this->headers)
+        ->putJson(route('api.posts.update', $post), [
+            'status' => PostStatus::Scheduled->value,
+            'scheduled_at' => now()->addDay()->toIso8601String(),
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('destinations.0.meta.board_id');
+
+    expect($post->fresh()->status)->toBe(PostStatus::Draft);
+});
+
+it('accepts changing an independent Instagram reel to a feed image during scheduling', function () {
+    Storage::fake(null, ['url' => 'https://cdn.example.com']);
+    $instagram = SocialAccount::factory()->instagram()->create(['workspace_id' => $this->workspace->id]);
+    $image = Media::factory()->stored()->temporaryUpload($this->workspace)->create();
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'user_id' => $this->user->id,
+        'status' => PostStatus::Draft,
+        'content' => 'Instagram image',
+        'media' => [MediaItem::fromMedia($image)->toArray()],
+    ]);
+    PostPlatform::factory()->create([
+        'post_id' => $post->id,
+        'social_account_id' => $instagram->id,
+        'platform' => Platform::Instagram,
+        'content_type' => ContentType::InstagramReel,
+    ]);
+
+    $this->withHeaders($this->headers)
+        ->putJson(route('api.posts.update', $post), [
+            'status' => PostStatus::Scheduled->value,
+            'scheduled_at' => now()->addDay()->toIso8601String(),
+            'content_type' => ContentType::InstagramFeed->value,
+        ])
+        ->assertOk();
+
+    expect($post->fresh()->status)->toBe(PostStatus::Scheduled)
+        ->and($post->postPlatforms()->sole()->content_type)->toBe(ContentType::InstagramFeed);
 });
 
 it('persists Google Business topic_type and offer meta on store', function () {
@@ -1082,4 +1160,368 @@ it('rejects publishing a Google Business post with a url-needing cta and no url'
         ])
         ->assertUnprocessable()
         ->assertJsonValidationErrors(['platforms.0.meta.call_to_action.url']);
+});
+
+it('persists youtube metadata on store and merges it on update', function () {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+    $meta = [
+        'title' => 'Title', 'category_id' => '27', 'privacy_status' => 'private', 'license' => 'youtube',
+        'notify_subscribers' => false, 'embeddable' => true, 'made_for_kids' => false, 'is_ai_generated' => true,
+    ];
+
+    $response = $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Short title',
+        'platforms' => [['social_account_id' => $account->id, 'content_type' => ContentType::YouTubeShort->value, 'meta' => $meta]],
+    ])->assertCreated();
+    $post = Post::findOrFail($response->json('id'));
+    $platform = $post->postPlatforms()->sole();
+    expect($platform->meta)->toEqual($meta);
+
+    $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
+        'status' => PostStatus::Draft->value,
+        'meta' => ['privacy_status' => 'unlisted'],
+    ])->assertOk();
+    expect($platform->fresh()->meta)->toEqual([...$meta, 'privacy_status' => 'unlisted']);
+});
+
+it('rejects scheduling a youtube title with angle brackets', function () {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id, 'user_id' => $this->user->id, 'content' => 'Short', 'status' => PostStatus::Draft,
+        'media' => [['id' => 'video-1', 'type' => 'video', 'path' => 'medias/video.mp4', 'url' => 'https://example.com/video.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'video.mp4']],
+    ]);
+    PostPlatform::factory()->youtube()->create(['post_id' => $post->id, 'social_account_id' => $account->id, 'enabled' => true]);
+
+    $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'meta' => ['title' => '<script>'],
+    ])->assertUnprocessable()->assertJsonValidationErrors('platforms.0.meta.title');
+});
+
+it('requires a youtube title when the post has no text to take it from', function (string $content, array $meta, bool $allowed) {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id, 'user_id' => $this->user->id, 'content' => $content, 'status' => PostStatus::Draft,
+        'media' => [['id' => 'video-1', 'type' => 'video', 'path' => 'medias/video.mp4', 'url' => 'https://example.com/video.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'video.mp4']],
+    ]);
+    PostPlatform::factory()->youtube()->create(['post_id' => $post->id, 'social_account_id' => $account->id, 'enabled' => true]);
+
+    $response = $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'meta' => $meta,
+    ]);
+
+    if ($allowed) {
+        $response->assertOk();
+
+        return;
+    }
+
+    $response->assertUnprocessable()->assertJsonValidationErrors(['destinations.0.meta.title' => __('posts.form.youtube.title_required')]);
+})->with([
+    'no text and no title' => ['', [], false],
+    'blank title and no text' => ['', ['title' => '   '], false],
+    'a title without text' => ['', ['title' => 'My short'], true],
+    'text without a title' => ['First line', [], true],
+]);
+
+it('saves a youtube draft without a title or text', function () {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => '',
+        'media' => [['id' => 'video-1', 'type' => 'video', 'path' => 'medias/video.mp4', 'url' => 'https://example.com/video.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'video.mp4']],
+        'platforms' => [['social_account_id' => $account->id, 'content_type' => ContentType::YouTubeShort->value]],
+    ])->assertJsonMissingValidationErrors('destinations.0.meta.title');
+});
+
+it('persists instagram options', function () {
+    $instagram = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::Instagram]);
+    $meta = ['share_to_feed' => false, 'is_ai_generated' => true];
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Reel',
+        'platforms' => [['social_account_id' => $instagram->id, 'content_type' => ContentType::InstagramReel->value, 'meta' => $meta]],
+    ])->assertCreated();
+    expect(PostPlatform::where('social_account_id', $instagram->id)->sole()->meta)->toEqual($meta);
+});
+
+it('rejects a youtube title with angle brackets on a draft', function () {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Short title',
+        'platforms' => [['social_account_id' => $account->id, 'content_type' => ContentType::YouTubeShort->value, 'meta' => ['title' => 'a <b>']]],
+    ])->assertUnprocessable()->assertJsonValidationErrors('destinations.0.meta.title');
+});
+
+it('stores a numeric youtube category id as a string', function () {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+
+    $response = $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Short title',
+        'platforms' => [['social_account_id' => $account->id, 'content_type' => ContentType::YouTubeShort->value, 'meta' => ['category_id' => 27]]],
+    ])->assertCreated();
+    $platform = Post::findOrFail($response->json('id'))->postPlatforms()->sole();
+
+    expect($platform->meta)->toEqual(['category_id' => '27']);
+
+    $this->withHeaders($this->headers)->putJson(route('api.posts.update', $platform->post_id), [
+        'status' => PostStatus::Draft->value,
+        'meta' => ['category_id' => 10],
+    ])->assertOk();
+
+    expect($platform->fresh()->meta['category_id'])->toBe('10');
+});
+
+it('persists a dropped link preview', function () {
+    $facebook = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::Facebook]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Read https://example.com/article',
+        'platforms' => [['social_account_id' => $facebook->id, 'content_type' => ContentType::FacebookPost->value, 'meta' => ['link_preview' => false]]],
+    ])->assertCreated();
+
+    expect(PostPlatform::where('social_account_id', $facebook->id)->sole()->meta)->toEqual(['link_preview' => false]);
+});
+
+it('rejects a non-boolean link preview', function () {
+    $facebook = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::Facebook]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Read https://example.com/article',
+        'platforms' => [['social_account_id' => $facebook->id, 'content_type' => ContentType::FacebookPost->value, 'meta' => ['link_preview' => 'nope']]],
+    ])->assertUnprocessable();
+});
+
+it('rejects scheduling a threads ghost post that carries media', function () {
+    $threads = SocialAccount::factory()->threads()->create(['workspace_id' => $this->workspace->id]);
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id, 'user_id' => $this->user->id, 'content' => 'Boo', 'status' => PostStatus::Draft,
+        'media' => [['id' => 'm', 'type' => 'image', 'path' => 'medias/m.jpg', 'url' => 'https://example.com/m.jpg', 'mime_type' => 'image/jpeg']],
+    ]);
+    $platform = PostPlatform::factory()->threads()->create(['post_id' => $post->id, 'social_account_id' => $threads->id, 'enabled' => true]);
+
+    $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'platforms' => [['id' => $platform->id, 'content_type' => ContentType::ThreadsGhostPost->value]],
+    ])->assertUnprocessable()->assertJsonValidationErrors(['platforms.0.content_type' => __('posts.form.warnings.text_only')]);
+});
+
+it('persists a threads topic tag and rejects a dotted one', function () {
+    $threads = SocialAccount::factory()->threads()->create(['workspace_id' => $this->workspace->id]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Hi',
+        'platforms' => [['social_account_id' => $threads->id, 'content_type' => ContentType::ThreadsPost->value, 'meta' => ['topic_tag' => 'laravel']]],
+    ])->assertCreated();
+    expect(PostPlatform::where('social_account_id', $threads->id)->sole()->meta)->toEqual(['topic_tag' => 'laravel']);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Hi',
+        'platforms' => [['social_account_id' => $threads->id, 'content_type' => ContentType::ThreadsPost->value, 'meta' => ['topic_tag' => 'web.dev']]],
+    ])->assertUnprocessable()->assertJsonValidationErrors('platforms.0.meta.topic_tag');
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Hi',
+        'platforms' => [['social_account_id' => $threads->id, 'content_type' => ContentType::ThreadsPost->value, 'meta' => ['topic_tag' => str_repeat('a', 51)]]],
+    ])->assertUnprocessable()->assertJsonValidationErrors('platforms.0.meta.topic_tag');
+});
+
+it('rejects scheduling an instagram caption with more than five hashtags', function () {
+    $instagram = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::Instagram]);
+
+    $response = $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Launch #a #b #c #d #e #f',
+        'status' => 'scheduled',
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'platforms' => [['social_account_id' => $instagram->id, 'content_type' => ContentType::InstagramFeed->value]],
+    ])->assertUnprocessable();
+
+    expect(collect($response->json('errors'))->flatten()->implode(' '))
+        ->toContain(__('posts.form.hashtags_exceed_platform', ['platform' => Platform::Instagram->label(), 'limit' => 5]));
+});
+
+it('schedules a stored instagram story with more than five hashtags', function () {
+    $instagram = SocialAccount::factory()->instagram()->create(['workspace_id' => $this->workspace->id]);
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'user_id' => $this->user->id,
+        'content' => 'Launch #a #b #c #d #e #f',
+        'status' => PostStatus::Draft,
+        'media' => [[
+            'id' => 'video-1', 'type' => 'video', 'path' => 'medias/story.mp4', 'url' => 'https://example.com/story.mp4',
+            'mime_type' => 'video/mp4', 'original_filename' => 'story.mp4',
+        ]],
+    ]);
+    $platform = PostPlatform::factory()->create([
+        'post_id' => $post->id, 'social_account_id' => $instagram->id,
+        'platform' => Platform::Instagram, 'content_type' => ContentType::InstagramStory, 'enabled' => true,
+    ]);
+
+    $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'platforms' => [['id' => $platform->id]],
+    ])->assertOk();
+
+    expect($post->fresh()->status)->toBe(PostStatus::Scheduled);
+});
+
+it('persists a mastodon content warning and counts it toward the limit when scheduling', function () {
+    $mastodon = SocialAccount::factory()->mastodon()->create(['workspace_id' => $this->workspace->id]);
+    $limit = Platform::Mastodon->maxContentLength();
+    $platform = fn (string $warning): array => [[
+        'social_account_id' => $mastodon->id,
+        'content_type' => ContentType::MastodonPost->value,
+        'meta' => ['spoiler_text' => $warning],
+    ]];
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Toot',
+        'platforms' => $platform('CW'),
+    ])->assertCreated();
+    expect(PostPlatform::where('social_account_id', $mastodon->id)->sole()->meta)->toEqual(['spoiler_text' => 'CW']);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => str_repeat('b', $limit - 9),
+        'status' => 'scheduled',
+        'scheduled_at' => now()->addDay()->toIso8601String(),
+        'platforms' => $platform(str_repeat('a', 10)),
+    ])->assertUnprocessable();
+});
+
+it('rejects an array mastodon content warning with 422 when scheduling', function () {
+    $mastodon = SocialAccount::factory()->mastodon()->create(['workspace_id' => $this->workspace->id]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Toot',
+        'scheduled_at' => now()->addDay()->toIso8601String(),
+        'platforms' => [[
+            'social_account_id' => $mastodon->id,
+            'content_type' => ContentType::MastodonPost->value,
+            'meta' => ['spoiler_text' => ['x']],
+        ]],
+    ])->assertUnprocessable();
+});
+
+it('rejects a numeric link preview', function (mixed $value) {
+    $facebook = SocialAccount::factory()->create(['workspace_id' => $this->workspace->id, 'platform' => Platform::Facebook]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Read https://example.com/article',
+        'platforms' => [['social_account_id' => $facebook->id, 'content_type' => ContentType::FacebookPost->value, 'meta' => ['link_preview' => $value]]],
+    ])->assertUnprocessable();
+
+    expect(PostPlatform::where('social_account_id', $facebook->id)->exists())->toBeFalse();
+})->with([0, '0', 1, '1']);
+
+it('schedules a threads ghost post whose text carries a link', function () {
+    $threads = SocialAccount::factory()->threads()->create(['workspace_id' => $this->workspace->id]);
+    $post = Post::factory()->create([
+        'workspace_id' => $this->workspace->id, 'user_id' => $this->user->id, 'content' => 'Boo', 'status' => PostStatus::Draft,
+    ]);
+    $platform = PostPlatform::factory()->threads()->create(['post_id' => $post->id, 'social_account_id' => $threads->id, 'enabled' => true]);
+
+    $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'content' => 'Read https://example.com/article',
+        'platforms' => [['id' => $platform->id, 'content_type' => ContentType::ThreadsGhostPost->value]],
+    ])->assertOk();
+
+    expect($platform->fresh()->content_type)->toBe(ContentType::ThreadsGhostPost);
+});
+
+it('judges a threads topic tag without its leading hash and stores it stripped', function () {
+    $threads = SocialAccount::factory()->threads()->create(['workspace_id' => $this->workspace->id]);
+    $tag = str_repeat('a', 50);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Hi',
+        'platforms' => [['social_account_id' => $threads->id, 'content_type' => ContentType::ThreadsPost->value, 'meta' => ['topic_tag' => "#{$tag}"]]],
+    ])->assertCreated();
+    expect(PostPlatform::where('social_account_id', $threads->id)->sole()->meta)->toEqual(['topic_tag' => $tag]);
+
+    foreach (["#{$tag}a", '#', '#web.dev'] as $invalid) {
+        $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+            'content' => 'Hi',
+            'platforms' => [['social_account_id' => $threads->id, 'content_type' => ContentType::ThreadsPost->value, 'meta' => ['topic_tag' => $invalid]]],
+        ])->assertUnprocessable()->assertJsonValidationErrors(['platforms.0.meta.topic_tag' => __('posts.form.threads.topic_invalid')]);
+    }
+});
+
+it('persists thread replies and rejects them where the network cannot chain when scheduling', function () {
+    $mastodon = SocialAccount::factory()->mastodon()->create(['workspace_id' => $this->workspace->id]);
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Root',
+        'platforms' => [['social_account_id' => $mastodon->id, 'content_type' => ContentType::MastodonPost->value, 'meta' => ['thread_replies' => ['Two', 'Three']]]],
+    ])->assertCreated();
+    expect(PostPlatform::where('social_account_id', $mastodon->id)->sole()->meta)->toEqual(['thread_replies' => [['text' => 'Two', 'media' => []], ['text' => 'Three', 'media' => []]]]);
+
+    $x = SocialAccount::factory()->x()->create(['workspace_id' => $this->workspace->id]);
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Root',
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addDay()->toIso8601String(),
+        'platforms' => [['social_account_id' => $x->id, 'content_type' => ContentType::XPost->value, 'meta' => ['thread_replies' => ['Two']]]],
+    ])->assertCreated();
+    expect(PostPlatform::where('social_account_id', $x->id)->sole()->meta)->toEqual(['thread_replies' => [['text' => 'Two', 'media' => []]]]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Root',
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addDay()->toIso8601String(),
+        'platforms' => [['social_account_id' => $x->id, 'content_type' => ContentType::XPost->value, 'meta' => ['thread_replies' => [str_repeat('a', 281)]]]],
+    ])->assertUnprocessable()->assertJsonValidationErrors(['destinations.0.meta.thread_replies.0']);
+
+    $threads = SocialAccount::factory()->threads()->create(['workspace_id' => $this->workspace->id]);
+    $post = Post::factory()->create(['workspace_id' => $this->workspace->id, 'user_id' => $this->user->id, 'content' => 'Root', 'status' => PostStatus::Draft]);
+    PostPlatform::factory()->threads()->create(['post_id' => $post->id, 'social_account_id' => $threads->id, 'enabled' => true, 'meta' => ['thread_replies' => ['Two']]]);
+
+    $this->withHeaders($this->headers)->putJson(route('api.posts.update', $post), [
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+    ])->assertUnprocessable();
+});
+
+it('stores each thread reply media with its reply, from an upload token', function () {
+    $x = SocialAccount::factory()->x()->create(['workspace_id' => $this->workspace->id]);
+    $upload = Media::factory()->stored()->temporaryUpload($this->workspace)->create();
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Root',
+        'platforms' => [['social_account_id' => $x->id, 'content_type' => ContentType::XPost->value, 'meta' => ['thread_replies' => [
+            ['text' => 'Two', 'media' => [['upload_token' => $upload->upload_token]]],
+        ]]]],
+    ])->assertCreated();
+
+    $platform = PostPlatform::where('social_account_id', $x->id)->sole();
+
+    expect($platform->meta['thread_replies'][0]['media'][0]['id'])->toBe($upload->id)
+        ->and($upload->fresh()->post_id)->toBe($platform->post_id)
+        ->and($platform->post->media)->toBe([]);
+});
+
+it('rejects a bluesky thread reply over the limit when scheduling', function () {
+    $bluesky = SocialAccount::factory()->bluesky()->create(['workspace_id' => $this->workspace->id]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Root',
+        'status' => PostStatus::Scheduled->value,
+        'scheduled_at' => now()->addDay()->toIso8601String(),
+        'platforms' => [['social_account_id' => $bluesky->id, 'content_type' => ContentType::BlueskyPost->value, 'meta' => ['thread_replies' => ['ok', str_repeat('a', 301)]]]],
+    ])->assertUnprocessable()->assertJsonValidationErrors(['destinations.0.meta.thread_replies.1' => __('posts.form.thread.reply_too_long', ['limit' => 300, 'over' => 1])]);
+});
+
+it('rejects more than 24 thread replies', function () {
+    $mastodon = SocialAccount::factory()->mastodon()->create(['workspace_id' => $this->workspace->id]);
+
+    $this->withHeaders($this->headers)->postJson(route('api.posts.store'), [
+        'content' => 'Root',
+        'platforms' => [['social_account_id' => $mastodon->id, 'content_type' => ContentType::MastodonPost->value, 'meta' => ['thread_replies' => array_fill(0, 25, 'Reply')]]],
+    ])->assertUnprocessable()->assertJsonValidationErrors(['platforms.0.meta.thread_replies']);
 });

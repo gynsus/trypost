@@ -1,165 +1,66 @@
 <script setup lang="ts">
-import { IconChevronDown, IconChevronUp } from '@tabler/icons-vue';
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 
-import MediaRulesWarning from '@/components/posts/editor/MediaRulesWarning.vue';
-import { Avatar } from '@/components/ui/avatar';
+import SettingsRow from '@/components/posts/editor/SettingsRow.vue';
+import SettingsSection from '@/components/posts/editor/SettingsSection.vue';
 import { Input } from '@/components/ui/input';
-import { getPlatformLogo } from '@/composables/usePlatformLogo';
-import { ContentType } from '@/types/content-type';
-import type { MediaItem } from '@/types/media';
-import { Platform } from '@/types/platform';
+import { toNullableText } from '@/lib/utils';
 
-interface SocialAccount {
-    id: string;
-    platform: string;
-    display_name: string;
-    username: string;
-    display_label: string;
-    avatar_url: string | null;
-}
+const props = withDefaults(
+    defineProps<{
+        meta?: Record<string, any>;
+        disabled?: boolean;
+    }>(),
+    { meta: () => ({}), disabled: false },
+);
 
-interface Props {
-    socialAccount: SocialAccount | null;
-    contentType: string;
-    media: MediaItem[];
-    meta?: Record<string, any>;
-    disabled?: boolean;
-}
-
-const props = withDefaults(defineProps<Props>(), {
-    disabled: false,
-    meta: () => ({}),
-});
-
-const emit = defineEmits<{
-    'update:contentType': [value: string];
-    'update:meta': [meta: Record<string, any>];
-}>();
-
-const open = ref(false);
-
-const variants = [
-    { value: ContentType.FacebookPost, labelKey: 'posts.form.facebook.variant.post' },
-    { value: ContentType.FacebookReel, labelKey: 'posts.form.facebook.variant.reel' },
-    { value: ContentType.FacebookStory, labelKey: 'posts.form.facebook.variant.story' },
-] as const;
-
-
-const aspectRatios = [
-    { value: '1:1', labelKey: 'posts.form.facebook.aspect.square' },
-    { value: '4:5', labelKey: 'posts.form.facebook.aspect.portrait' },
-    { value: '16:9', labelKey: 'posts.form.facebook.aspect.landscape' },
-    { value: 'original', labelKey: 'posts.form.facebook.aspect.original' },
-];
-
-const isFeed = computed(() => props.contentType === ContentType.FacebookPost);
-const selectedAspectRatio = computed(() => props.meta.aspect_ratio ?? 'original');
+const emit = defineEmits<{ 'update:meta': [value: Record<string, any>] }>();
 
 const locationId = computed({
-    get: () => (props.meta?.location_id as string | undefined) || '',
-    set: (value: string) => emit('update:meta', { ...props.meta, location_id: value.trim() || null }),
+    get: () => toNullableText(props.meta.location_id) ?? '',
+    set: (value: string) =>
+        emit('update:meta', {
+            ...props.meta,
+            location_id: toNullableText(value.trim()),
+        }),
 });
-
 const locationName = computed({
-    get: () => (props.meta?.location_name as string | undefined) || '',
-    set: (value: string) => emit('update:meta', { ...props.meta, location_name: value || null }),
+    get: () => toNullableText(props.meta.location_name) ?? '',
+    set: (value: string) =>
+        emit('update:meta', {
+            ...props.meta,
+            location_name: toNullableText(value),
+        }),
 });
-
-const pickVariant = (value: string) => {
-    if (props.disabled) return;
-    emit('update:contentType', value);
-};
-
-const pickAspectRatio = (value: string) => {
-    if (props.disabled) return;
-    emit('update:meta', { ...props.meta, aspect_ratio: value });
-};
 </script>
 
 <template>
-    <div class="rounded-xl border-2 border-foreground bg-card shadow-2xs">
-        <button
-            type="button"
-            class="flex w-full cursor-pointer items-center justify-between gap-3 p-4 text-sm"
-            data-testid="facebook-settings-toggle"
-            @click="open = !open"
+    <SettingsSection>
+        <SettingsRow
+            :label="$t('posts.form.location.label')"
+            label-for="facebook-location-id"
+            align-top
         >
-            <span class="flex min-w-0 items-center gap-2">
-                <span class="inline-flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-foreground bg-card shadow-2xs">
-                    <img :src="getPlatformLogo('facebook')" alt="Facebook" class="size-full object-cover" />
-                </span>
-                <span class="truncate font-bold text-foreground">{{ $t('posts.form.facebook.settings') }}</span>
-                <span v-if="socialAccount?.username" class="truncate font-medium text-foreground/60">·&nbsp;@{{ socialAccount.username }}</span>
-            </span>
-            <IconChevronUp v-if="open" class="size-4 shrink-0 text-foreground/60" />
-            <IconChevronDown v-else class="size-4 shrink-0 text-foreground/60" />
-        </button>
-
-        <div v-if="open" class="space-y-5 border-t-2 border-foreground/10 px-4 pb-4 pt-4">
-            <div v-if="socialAccount" class="flex items-center gap-3 rounded-lg bg-foreground/5 p-3">
-                <Avatar
-                    :src="socialAccount.avatar_url"
-                    :name="socialAccount.display_label"
-                    class="size-9 shrink-0 rounded-full border-2 border-foreground shadow-2xs"
+            <div class="grid grid-cols-2 gap-3">
+                <Input
+                    id="facebook-location-id"
+                    v-model="locationId"
+                    data-testid="facebook-location-id"
+                    type="text"
+                    :placeholder="$t('posts.form.location.id_placeholder')"
+                    :disabled="disabled"
                 />
-                <div class="min-w-0 flex-1">
-                    <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.facebook.posting_to') }}</p>
-                    <p class="truncate text-sm">
-                        <span class="font-bold text-foreground">{{ socialAccount.display_label }}</span>
-                        <span v-if="socialAccount?.username" class="font-medium text-foreground/60">&nbsp;@{{ socialAccount.username }}</span>
-                    </p>
-                </div>
+                <Input
+                    v-model="locationName"
+                    data-testid="facebook-location-name"
+                    type="text"
+                    :placeholder="$t('posts.form.location.name_placeholder')"
+                    :disabled="disabled"
+                />
             </div>
-
-            <div class="space-y-2">
-                <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.facebook.variant_label') }}</p>
-                <div class="flex flex-wrap gap-2">
-                    <button
-                        v-for="variant in variants"
-                        :key="variant.value"
-                        type="button"
-                        class="cursor-pointer rounded-full border-2 px-3 py-1 text-xs font-bold uppercase tracking-widest transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                        :class="contentType === variant.value
-                            ? 'border-foreground bg-violet-100 text-foreground shadow-2xs'
-                            : 'border-foreground/30 text-foreground/70 hover:border-foreground hover:text-foreground'"
-                        :disabled="disabled"
-                        @click="pickVariant(variant.value)"
-                    >
-                        {{ $t(variant.labelKey) }}
-                    </button>
-                </div>
-            </div>
-
-            <div v-if="isFeed" class="space-y-2">
-                <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.facebook.aspect_label') }}</p>
-                <div class="flex flex-wrap gap-2">
-                    <button
-                        v-for="ratio in aspectRatios"
-                        :key="ratio.value"
-                        type="button"
-                        class="cursor-pointer rounded-full border-2 px-3 py-1 text-xs font-bold uppercase tracking-widest transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                        :class="selectedAspectRatio === ratio.value
-                            ? 'border-foreground bg-violet-100 text-foreground shadow-2xs'
-                            : 'border-foreground/30 text-foreground/70 hover:border-foreground hover:text-foreground'"
-                        :disabled="disabled"
-                        @click="pickAspectRatio(ratio.value)"
-                    >
-                        {{ $t(ratio.labelKey) }}
-                    </button>
-                </div>
-            </div>
-
-            <div class="space-y-2">
-                <p class="text-[11px] font-black uppercase tracking-widest text-foreground/60">{{ $t('posts.form.location.label') }}</p>
-                <div class="grid grid-cols-2 gap-3">
-                    <Input v-model="locationId" type="text" :placeholder="$t('posts.form.location.id_placeholder')" :disabled="disabled || previewOnly" />
-                    <Input v-model="locationName" type="text" :placeholder="$t('posts.form.location.name_placeholder')" :disabled="disabled || previewOnly" />
-                </div>
-                <p class="text-xs text-foreground/60">{{ $t('posts.form.location.hint') }}</p>
-            </div>
-
-            <MediaRulesWarning :content-type="contentType" :media="media" :platform="Platform.Facebook" />
-        </div>
-    </div>
+            <p class="text-xs text-foreground/60">
+                {{ $t('posts.form.location.hint') }}
+            </p>
+        </SettingsRow>
+    </SettingsSection>
 </template>

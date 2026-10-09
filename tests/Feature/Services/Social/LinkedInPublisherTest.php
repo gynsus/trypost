@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use App\Enums\Media\Type as MediaType;
 use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
+use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\LinkedInPublishException;
 use App\Exceptions\TokenExpiredException;
 use App\Models\Post;
@@ -1080,6 +1082,94 @@ test('linkedin publisher throws and does not post when document init fails', fun
     Http::assertNotSent(fn ($request) => str_contains($request->url(), '/rest/posts'));
 });
 
+test('linkedin publisher retries a LinkedIn 5xx while uploading media before the post exists', function (string $initPath, string $mimeType, string $file) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'media-1', 'path' => "media/2026-01/{$file}",
+            'url' => "https://example.com/media/2026-01/{$file}",
+            'mime_type' => $mimeType, 'original_filename' => $file,
+        ]],
+    ]);
+
+    Http::fake(function ($request) use ($initPath) {
+        if (str_contains($request->url(), $initPath)) {
+            return Http::response(['message' => 'RestException{_response=RestResponse[status=500]}', 'status' => 500], 500);
+        }
+
+        return Http::response('fake-bytes', 200);
+    });
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(fn (PlatformUnavailableException $exception) => expect($exception->httpStatus)->toBe(500));
+
+    Http::assertNotSent(fn ($request) => str_contains($request->url(), '/rest/posts'));
+})->with([
+    'image' => ['/rest/images', 'image/jpeg', 'photo.jpg'],
+    'video' => ['/rest/videos', 'video/mp4', 'clip.mp4'],
+    'document' => ['/rest/documents', 'application/pdf', 'deck.pdf'],
+]);
+
+test('linkedin publisher retries a LinkedIn 5xx after the media upload starts and before the post exists', function (string $failingStep, string $mimeType, string $file) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'media-1', 'path' => "media/2026-01/{$file}",
+            'url' => "https://example.com/media/2026-01/{$file}",
+            'mime_type' => $mimeType, 'original_filename' => $file,
+        ]],
+    ]);
+
+    $uploadUrls = [
+        'image upload' => 'https://www.linkedin.com/dms/upload/image/1',
+        'video chunk' => 'https://www.linkedin.com/dms/upload/video/1',
+        'document upload' => 'https://www.linkedin.com/dms/upload/document/1',
+    ];
+
+    Http::fake(function ($request) use ($failingStep, $uploadUrls) {
+        $url = $request->url();
+        $failingUrl = $failingStep === 'video finalize' ? 'finalizeUpload' : $uploadUrls[$failingStep];
+
+        if (str_contains($url, $failingUrl)) {
+            return Http::response(['message' => 'RestException{_response=RestResponse[status=503]}', 'status' => 503], 503);
+        }
+
+        if (str_contains($url, '/rest/images')) {
+            return Http::response(['value' => ['uploadUrl' => $uploadUrls['image upload'], 'image' => 'urn:li:image:1']], 200);
+        }
+
+        if (str_contains($url, '/rest/videos') && str_contains($url, 'initializeUpload')) {
+            return Http::response(['value' => [
+                'video' => 'urn:li:video:1',
+                'uploadToken' => 'upload-token',
+                'uploadInstructions' => [['uploadUrl' => $uploadUrls['video chunk'], 'firstByte' => 0, 'lastByte' => 9]],
+            ]], 200);
+        }
+
+        if (str_contains($url, '/rest/documents') && str_contains($url, 'initializeUpload')) {
+            return Http::response(['value' => ['uploadUrl' => $uploadUrls['document upload'], 'document' => 'urn:li:document:1']], 200);
+        }
+
+        if (in_array($url, $uploadUrls, true)) {
+            return Http::response(null, 201, ['etag' => '"etag-1"']);
+        }
+
+        if (str_contains($url, '/rest/posts')) {
+            return Http::response(null, 201, ['x-restli-id' => 'urn:li:share:1']);
+        }
+
+        return Http::response('fake-bytes', 200);
+    });
+
+    expect(fn () => $this->publisher->publish($this->postPlatform))
+        ->toThrow(fn (PlatformUnavailableException $exception) => expect($exception->httpStatus)->toBe(503));
+
+    Http::assertNotSent(fn ($request) => str_contains($request->url(), '/rest/posts'));
+})->with([
+    'image upload' => ['image upload', 'image/jpeg', 'photo.jpg'],
+    'video chunk' => ['video chunk', 'video/mp4', 'clip.mp4'],
+    'video finalize' => ['video finalize', 'video/mp4', 'clip.mp4'],
+    'document upload' => ['document upload', 'application/pdf', 'deck.pdf'],
+]);
+
 test('linkedin publisher throws when document init response is missing the urn', function () {
     $this->postPlatform->update(['content_type' => ContentType::LinkedInPost]);
     $this->post->update([
@@ -1201,6 +1291,25 @@ test('linkedin publisher sends an article card for a text post that contains a l
             && $article['description'] === 'A great read'
             && ! isset($article['thumbnail']);
     });
+});
+
+test('linkedin publisher sends no article when the user dropped the link preview', function () {
+    $this->post->update(['content' => 'Read this https://example.com/article today.']);
+    $this->postPlatform->update(['meta' => ['link_preview' => false]]);
+
+    $this->mock(LinkCardFetcher::class)->shouldReceive('fetch')->never();
+
+    Http::fake([
+        config('trypost.platforms.linkedin.api').'/rest/posts' => Http::response(null, 201, [
+            'x-restli-id' => 'urn:li:share:1234567890',
+        ]),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn ($request) => str_contains($request->url(), '/rest/posts')
+        && $request['commentary'] === 'Read this https://example.com/article today.'
+        && ! isset($request['content']));
 });
 
 test('linkedin publisher skips the article card when the page has no title', function () {
@@ -1397,6 +1506,38 @@ test('linkedin publisher stops downloading an oversized article thumbnail', func
             && $article['title'] === 'The Article'
             && ! isset($article['thumbnail']);
     });
+});
+
+test('linkedin publisher downloads the article thumbnail uncompressed and size-capped', function () {
+    $this->post->update(['content' => 'Read this https://example.com/article']);
+
+    $this->mock(LinkCardFetcher::class)
+        ->shouldReceive('fetch')
+        ->once()
+        ->andReturn(new LinkCardMetadata(
+            uri: 'https://example.com/article',
+            title: 'The Article',
+            description: 'A great read',
+            imageUrl: 'https://93.184.216.34/card.jpg',
+        ));
+
+    $thumb = null;
+    Http::fake(function ($request, array $options) use (&$thumb) {
+        if (str_contains($request->url(), 'card.jpg')) {
+            $thumb = ['options' => $options, 'encoding' => $request->header('Accept-Encoding')];
+
+            return Http::response('', 500);
+        }
+
+        return Http::response(null, 201, ['x-restli-id' => 'urn:li:share:capped']);
+    });
+
+    $this->publisher->publish($this->postPlatform);
+
+    expect(data_get($thumb, 'options.decode_content'))->toBeFalse()
+        ->and(data_get($thumb, 'options.allow_redirects'))->toBeFalse()
+        ->and(data_get($thumb, 'encoding'))->toBe(['identity'])
+        ->and(fn () => $thumb['options']['progress'](MediaType::Image->maxSizeInBytes() + 1, 0))->toThrow(RuntimeException::class);
 });
 
 test('linkedin publisher publishes the text when the link preview lookup fails', function () {

@@ -5,12 +5,16 @@ declare(strict_types=1);
 namespace App\Services\Social;
 
 use App\Dto\MediaItem;
+use App\Enums\YouTube\License;
+use App\Enums\YouTube\PrivacyStatus;
+use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\YouTubePublishException;
 use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Services\Social\Concerns\HasSocialHttpClient;
 use App\Support\YouTubeDescription;
+use App\Support\YouTubeMetadata;
 use Google\Client as GoogleClient;
 use Google\Service\Exception;
 use Google\Service\YouTube;
@@ -33,8 +37,17 @@ class YouTubePublisher
     {
         $this->validateContentLength($postPlatform);
 
-        $content = $postPlatform->resolvedContent()
-            ? app(ContentSanitizer::class)->sanitize($postPlatform->resolvedContent(), $postPlatform->platform)
+        $metadataViolation = YouTubeMetadata::violation($postPlatform->meta);
+
+        if ($metadataViolation !== null) {
+            throw new YouTubePublishException(
+                userMessage: $metadataViolation[1],
+                category: ErrorCategory::ContentPolicy,
+            );
+        }
+
+        $content = $postPlatform->post->content
+            ? app(ContentSanitizer::class)->sanitize($postPlatform->post->content, $postPlatform->platform)
             : null;
         $description = $this->resolveDescription($postPlatform, $content);
 
@@ -62,7 +75,7 @@ class YouTubePublisher
             );
         }
 
-        return $this->publishShort($postPlatform, $firstMedia, $account, $content, $description);
+        return $this->publishShort($firstMedia, $account, $content, $description, $postPlatform->meta ?? []);
     }
 
     private function createGoogleClient(SocialAccount $account): GoogleClient
@@ -90,11 +103,16 @@ class YouTubePublisher
         return $client;
     }
 
-    private function publishShort(PostPlatform $postPlatform, MediaItem $media, SocialAccount $account, ?string $content, string $description): array
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    private function publishShort(MediaItem $media, SocialAccount $account, ?string $content, string $description, array $meta): array
     {
-        if (empty($content)) {
+        $missingTitle = YouTubeMetadata::missingTitleViolation($meta, (string) $content);
+
+        if ($missingTitle !== null) {
             throw new YouTubePublishException(
-                userMessage: 'YouTube Shorts require a title. Please add text to your post.',
+                userMessage: $missingTitle[1],
                 category: ErrorCategory::ContentPolicy,
             );
         }
@@ -110,7 +128,7 @@ class YouTubePublisher
 
         try {
             $this->downloadVideo($media, $tempFile);
-            $video = $this->uploadVideo($media, $account, $tempFile, $this->buildVideo($postPlatform, $content, $description));
+            $video = $this->uploadVideo($media, $account, $tempFile, $this->buildVideo($meta, (string) $content, $description), $this->insertParameters($meta));
             $videoId = $video->getId();
 
             return [
@@ -119,6 +137,8 @@ class YouTubePublisher
             ];
         } catch (Exception $e) {
             throw YouTubePublishException::fromGoogleException($e);
+        } catch (PlatformUnavailableException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             Log::error('YouTube upload failed', [
                 'error' => $e->getMessage(),
@@ -145,7 +165,10 @@ class YouTubePublisher
         }
     }
 
-    private function uploadVideo(MediaItem $media, SocialAccount $account, string $path, Video $video): Video
+    /**
+     * @param  array<string, bool>  $insertParameters
+     */
+    private function uploadVideo(MediaItem $media, SocialAccount $account, string $path, Video $video, array $insertParameters): Video
     {
         $fileSize = filesize($path);
 
@@ -171,7 +194,7 @@ class YouTubePublisher
             $youtube = new YouTube($client);
             $mediaUpload = new Google_Http_MediaFileUpload(
                 $client,
-                $youtube->videos->insert($video->getRecordingDetails() !== null ? 'snippet,status,recordingDetails' : 'snippet,status', $video),
+                $youtube->videos->insert($video->getRecordingDetails() !== null ? 'snippet,status,recordingDetails' : 'snippet,status', $video, $insertParameters),
                 $media->mime_type ?: 'video/mp4',
                 null,
                 true,
@@ -179,11 +202,23 @@ class YouTubePublisher
             );
             $mediaUpload->setFileSize($fileSize);
 
+            try {
+                $mediaUpload->getResumeUri();
+            } catch (Exception $e) {
+                throw YouTubePublishException::isServerError($e) ? $this->uploadUnavailable($e) : $e;
+            }
+
             $uploadStatus = false;
 
             while (! $uploadStatus && ! feof($handle)) {
                 $chunk = fread($handle, self::CHUNK_SIZE);
-                $uploadStatus = $mediaUpload->nextChunk($chunk);
+                $isFinalChunk = ftell($handle) >= $fileSize;
+
+                try {
+                    $uploadStatus = $mediaUpload->nextChunk($chunk);
+                } catch (Exception $e) {
+                    throw ! $isFinalChunk && YouTubePublishException::isServerError($e) ? $this->uploadUnavailable($e) : $e;
+                }
             }
 
             if (! $uploadStatus instanceof Video) {
@@ -198,6 +233,14 @@ class YouTubePublisher
             fclose($handle);
             $client->setDefer(false);
         }
+    }
+
+    private function uploadUnavailable(Exception $e): PlatformUnavailableException
+    {
+        return new PlatformUnavailableException(
+            message: "YouTube returned {$e->getCode()} during upload",
+            httpStatus: $e->getCode() >= 500 ? $e->getCode() : null,
+        );
     }
 
     private function resolveDescription(PostPlatform $postPlatform, ?string $content): string
@@ -216,34 +259,49 @@ class YouTubePublisher
         return $description;
     }
 
-    private function buildVideo(PostPlatform $postPlatform, string $content, string $description): Video
+    /**
+     * @param  array<string, mixed>  $meta
+     * @return array<string, bool>
+     */
+    private function insertParameters(array $meta): array
+    {
+        return data_get($meta, 'notify_subscribers', true) ? [] : ['notifySubscribers' => false];
+    }
+
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    private function buildVideo(array $meta, string $content, string $description): Video
     {
         $snippet = new VideoSnippet;
-        $snippet->setTitle($this->resolveTitle($postPlatform, $content));
+        $snippet->setTitle(YouTubeMetadata::title($meta, $content));
         $snippet->setDescription($description);
-        $snippet->setCategoryId((string) (data_get($postPlatform->meta, 'category_id') ?: '22'));
+        $snippet->setCategoryId(YouTubeMetadata::categoryId($meta));
+
+        $status = new VideoStatus;
+        $status->setPrivacyStatus((PrivacyStatus::tryFrom((string) data_get($meta, 'privacy_status')) ?? PrivacyStatus::DEFAULT)->value);
+        $status->setLicense((License::tryFrom((string) data_get($meta, 'license')) ?? License::DEFAULT)->value);
+        $status->setEmbeddable((bool) data_get($meta, 'embeddable', true));
+        $status->setSelfDeclaredMadeForKids((bool) data_get($meta, 'made_for_kids', false));
+        $status->setContainsSyntheticMedia((bool) data_get($meta, 'is_ai_generated', false));
 
         $tags = array_values(array_filter(array_map(
             fn ($tag) => trim((string) $tag),
-            (array) data_get($postPlatform->meta, 'tags', []),
+            (array) data_get($meta, 'tags', []),
         )));
         if ($tags !== []) {
             $snippet->setTags($tags);
         }
 
-        if (filled($language = data_get($postPlatform->meta, 'default_language'))) {
+        if (filled($language = data_get($meta, 'default_language'))) {
             $snippet->setDefaultLanguage((string) $language);
         }
-
-        $status = new VideoStatus;
-        $status->setPrivacyStatus('public');
-        $status->setSelfDeclaredMadeForKids(false);
 
         $video = new Video;
         $video->setSnippet($snippet);
         $video->setStatus($status);
 
-        $recording = data_get($postPlatform->meta, 'recording_location');
+        $recording = data_get($meta, 'recording_location');
         if (is_array($recording) && isset($recording['lat'], $recording['lng'])) {
             $location = new GeoPoint;
             $location->setLatitude((float) $recording['lat']);
@@ -259,33 +317,5 @@ class YouTubePublisher
         }
 
         return $video;
-    }
-
-    /**
-     * The video title: the per-platform `meta.title` when set (YouTube caps
-     * titles at 100 chars — the shared `title` meta rule enforces that),
-     * otherwise derived from the first line of the content as before.
-     */
-    private function resolveTitle(PostPlatform $postPlatform, string $content): string
-    {
-        $title = trim((string) data_get($postPlatform->meta, 'title'));
-
-        return $title !== '' ? $title : $this->buildTitle($content);
-    }
-
-    private function buildTitle(string $content): string
-    {
-        $maxLength = 100;
-        $shortsTag = ' #Shorts';
-        $availableLength = $maxLength - mb_strlen($shortsTag);
-
-        $firstLine = explode("\n", $content)[0];
-        $title = explode('.', $firstLine)[0];
-
-        if (mb_strlen($title) > $availableLength) {
-            $title = mb_substr($title, 0, $availableLength - 3).'...';
-        }
-
-        return $title.$shortsTag;
     }
 }

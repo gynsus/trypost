@@ -438,6 +438,12 @@ test('a dead token after the review ceiling gives up', function () {
         config('trypost.platforms.google_business.local_posts_api').'/*' => Http::response([
             'error' => ['status' => 'UNAUTHENTICATED'],
         ], 401),
+        config('trypost.platforms.google_business.business_information_api').'/*' => Http::response([
+            'error' => ['status' => 'UNAUTHENTICATED'],
+        ], 401),
+        config('trypost.platforms.google_business.oauth_api').'/token' => Http::response([
+            'error' => 'invalid_grant',
+        ], 400),
     ]);
 
     (new ReconcileGoogleBusinessPost($this->target))->handle();

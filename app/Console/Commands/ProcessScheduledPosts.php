@@ -6,27 +6,65 @@ namespace App\Console\Commands;
 
 use App\Enums\Post\Status as PostStatus;
 use App\Jobs\PublishPost;
+use App\Jobs\PublishToSocialPlatform;
 use App\Models\Post;
+use App\Models\PostPlatform;
+use App\Support\Social\LimitRetryPolicy;
 use Illuminate\Console\Command;
+use Throwable;
 
 class ProcessScheduledPosts extends Command
 {
     protected $signature = 'posts:process-scheduled';
 
-    protected $description = 'Process scheduled posts that are due for publishing';
+    protected $description = 'Process scheduled posts and network limit retries that are due for publishing';
 
     public function handle(): void
     {
         Post::query()
             ->due()
             ->each(function (Post $post) {
-                // Atomically claim the post — only dispatch if we successfully change its status
-                $claimed = Post::where('id', $post->id)
-                    ->where('status', PostStatus::Scheduled)
-                    ->update(['status' => PostStatus::Publishing]);
+                try {
+                    $claimed = Post::where('id', $post->id)
+                        ->where('status', PostStatus::Scheduled)
+                        ->update(['status' => PostStatus::Publishing]);
 
-                if ($claimed) {
-                    PublishPost::dispatch($post);
+                    if ($claimed) {
+                        PublishPost::dispatch($post);
+                    }
+                } catch (Throwable $exception) {
+                    report($exception);
+                }
+            });
+
+        $this->dispatchDueLimitRetries();
+    }
+
+    /**
+     * Targets a network refused for a limit wait in the database, not in a
+     * delayed job, so a worker restart never loses them. Clearing retry_at
+     * claims the target, so each retry is dispatched once.
+     */
+    private function dispatchDueLimitRetries(): void
+    {
+        PostPlatform::query()
+            ->enabled()
+            ->dueForLimitRetry()
+            ->each(function (PostPlatform $postPlatform): void {
+                try {
+                    $claimed = PostPlatform::query()
+                        ->whereKey($postPlatform->id)
+                        ->dueForLimitRetry()
+                        ->update(['retry_at' => null]);
+
+                    if ($claimed) {
+                        PublishToSocialPlatform::dispatch(
+                            $postPlatform,
+                            LimitRetryPolicy::UNIQUE_ATTEMPT_OFFSET + LimitRetryPolicy::retriesSoFar($postPlatform->error_context),
+                        );
+                    }
+                } catch (Throwable $exception) {
+                    report($exception);
                 }
             });
     }
