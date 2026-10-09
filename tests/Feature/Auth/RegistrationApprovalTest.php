@@ -22,8 +22,8 @@ test('open registration creates a pending user and notifies the admin', function
     $this->post(route('register.store'), [
         'name' => 'New Client',
         'email' => 'client@example.com',
-        'password' => 'password123',
-        'password_confirmation' => 'password123',
+        'password' => strongPassword(),
+        'locale' => 'en',
     ]);
 
     $user = User::where('email', 'client@example.com')->first();
@@ -42,8 +42,8 @@ test('registration without the approval requirement is approved immediately', fu
     $this->post(route('register.store'), [
         'name' => 'New Client',
         'email' => 'client@example.com',
-        'password' => 'password123',
-        'password_confirmation' => 'password123',
+        'password' => strongPassword(),
+        'locale' => 'en',
     ]);
 
     expect(User::where('email', 'client@example.com')->first()->isPendingApproval())->toBeFalse();
