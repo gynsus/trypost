@@ -13,6 +13,7 @@ test('bluesky refresh posts refreshSession with no request body', function () {
     $workspace = Workspace::factory()->create(['user_id' => $user->id]);
     $account = SocialAccount::factory()->bluesky()->create([
         'workspace_id' => $workspace->id,
+        'platform_user_id' => 'did:plc:refresh123',
         'refresh_token' => 'refresh-jwt',
     ]);
 
@@ -20,6 +21,8 @@ test('bluesky refresh posts refreshSession with no request body', function () {
 
     Http::fake([
         "{$service}/xrpc/com.atproto.server.refreshSession" => Http::response([
+            'did' => 'did:plc:refresh123',
+            'handle' => 'testuser.bsky.social',
             'accessJwt' => 'new-access',
             'refreshJwt' => 'new-refresh',
         ], 200),
