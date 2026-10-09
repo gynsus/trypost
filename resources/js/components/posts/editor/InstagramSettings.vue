@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
-import CharacterCounter from '@/components/posts/editor/CharacterCounter.vue';
+import CharacterCounter from '@/components/CharacterCounter.vue';
 import SettingsRow from '@/components/posts/editor/SettingsRow.vue';
 import SettingsSection from '@/components/posts/editor/SettingsSection.vue';
 import { Switch } from '@/components/ui/switch';
