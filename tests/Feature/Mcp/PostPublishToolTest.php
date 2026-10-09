@@ -5,7 +5,6 @@ declare(strict_types=1);
 use App\Enums\Post\Status as PostStatus;
 use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
-use App\Enums\UserWorkspace\Role;
 use App\Jobs\PublishPost;
 use App\Mcp\Servers\TryPostServer;
 use App\Mcp\Tools\Post\PublishPostTool;
@@ -16,13 +15,14 @@ use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Models\WorkspaceLabel;
+use App\Support\PostStatusRules;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\Fluent\AssertableJson;
 
 beforeEach(function () {
     $this->user = User::factory()->create();
     $this->workspace = Workspace::factory()->create(['user_id' => $this->user->id]);
-    $this->workspace->members()->attach($this->user->id, ['role' => Role::Member->value]);
+    $this->workspace->members()->attach($this->user->id, membershipPivot('member'));
     $this->user->update(['current_workspace_id' => $this->workspace->id]);
 
     $this->socialAccount = SocialAccount::factory()->create([
@@ -54,7 +54,7 @@ test('update post can change content', function () {
     expect($post->fresh()->content)->toBe('new content');
 });
 
-test('update post enables platforms', function () {
+test('update post cannot turn a targetless legacy draft into a channel post', function () {
     $post = Post::factory()->create([
         'workspace_id' => $this->workspace->id,
         'user_id' => $this->user->id,
@@ -74,9 +74,9 @@ test('update post enables platforms', function () {
             ],
         ]);
 
-    $response->assertOk();
+    $response->assertHasErrors();
 
-    expect($platform->fresh()->enabled)->toBeTrue();
+    expect($platform->fresh()->enabled)->toBeFalse();
 });
 
 test('update post can attach labels', function () {
@@ -116,7 +116,7 @@ test('update post rejects posts in any terminal state', function (PostStatus $st
     $response = TryPostServer::actingAs($this->user)
         ->tool(UpdatePostTool::class, ['post_id' => $post->id, 'content' => 'x']);
 
-    $response->assertHasErrors([__('posts.cannot_edit_finalized')]);
+    $response->assertHasErrors([__('posts.flash.cannot_edit_finalized')]);
 })->with([
     PostStatus::Published,
     PostStatus::PartiallyPublished,
@@ -186,6 +186,7 @@ test('publish post immediate dispatches PublishPost job', function () {
         'user_id' => $this->user->id,
         'status' => PostStatus::Draft,
         'scheduled_at' => null,
+        'content' => 'Ready to publish',
     ]);
 
     PostPlatform::factory()->linkedin()->create([
@@ -216,6 +217,7 @@ test('publish post scheduled does not dispatch immediately', function () {
         'workspace_id' => $this->workspace->id,
         'user_id' => $this->user->id,
         'status' => PostStatus::Draft,
+        'content' => 'Ready to schedule',
     ]);
 
     PostPlatform::factory()->linkedin()->create([
@@ -252,7 +254,7 @@ test('publish post fails when no platforms enabled', function () {
     $response = TryPostServer::actingAs($this->user)
         ->tool(PublishPostTool::class, ['post_id' => $post->id]);
 
-    $response->assertHasErrors(['Post has no enabled platforms. Use update-post-tool to enable at least one platform first.']);
+    $response->assertHasErrors([__('posts.errors.no_social_account')]);
 });
 
 test('publish post 404 from another workspace', function () {
@@ -280,10 +282,16 @@ test('publish post rejects posts already in a terminal state', function (PostSta
     $response = TryPostServer::actingAs($this->user)
         ->tool(PublishPostTool::class, ['post_id' => $post->id]);
 
-    $response->assertHasErrors([__('posts.cannot_edit_finalized')]);
+    $response->assertHasErrors([__('posts.flash.cannot_edit_finalized')]);
 })->with([
     PostStatus::Published,
     PostStatus::PartiallyPublished,
     PostStatus::Failed,
     PostStatus::Publishing,
 ]);
+
+test('the edit blocked message is translated text, not a lang key', function () {
+    expect(PostStatusRules::editBlockedMessage())
+        ->toBe(__('posts.flash.cannot_edit_finalized'))
+        ->not->toBe('posts.flash.cannot_edit_finalized');
+});

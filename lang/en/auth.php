@@ -58,8 +58,7 @@ return [
     'github_email_unavailable' => 'Unable to retrieve your email from GitHub. Make your GitHub email public or grant the email scope, then try again.',
 
     'login' => [
-        'title' => 'Log in to your account',
-        'description' => 'Enter your email and password below to log in',
+        'title' => 'Log in to TryPost',
         'page_title' => 'Log in',
         'email' => 'Email address',
         'password' => 'Password',
@@ -73,10 +72,8 @@ return [
     ],
 
     'register' => [
-        'title' => 'Your whole social calendar, in one place',
-        'description' => 'Create your account and start scheduling posts across every network.',
+        'title' => 'Create a TryPost account',
         'page_title' => 'Register',
-        'signup_with_email' => 'Sign up with email',
         'name' => 'Name',
         'name_placeholder' => 'Full name',
         'email' => 'Email address',
@@ -86,6 +83,12 @@ return [
         'submit' => 'Create account',
         'has_account' => 'Already have an account?',
         'log_in' => 'Log in',
+        'password_requirements' => [
+            'min' => 'At least :count characters',
+            'mixed_case' => 'Upper and lowercase letters',
+            'number' => 'At least 1 number',
+            'symbol' => 'At least 1 symbol',
+        ],
     ],
 
     'forgot_password' => [

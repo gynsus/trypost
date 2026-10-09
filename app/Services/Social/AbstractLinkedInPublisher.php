@@ -6,12 +6,13 @@ namespace App\Services\Social;
 
 use App\Enums\Media\Type as MediaType;
 use App\Enums\SocialAccount\Platform;
+use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\LinkedInPublishException;
 use App\Exceptions\TokenExpiredException;
 use App\Models\PostPlatform;
 use App\Models\SocialAccount;
-use App\Services\Brand\SafeHttpFetcher;
+use App\Services\Http\SafeHttpFetcher;
 use App\Services\Media\MediaOptimizer;
 use App\Services\Social\Concerns\HasSocialHttpClient;
 use App\Services\Social\LinkCard\LinkCardFetcher;
@@ -108,7 +109,7 @@ abstract class AbstractLinkedInPublisher
             return $this->publishCarousel($content, $media);
         }
 
-        return $this->publishPost($content, $media);
+        return $this->publishPost($content, $media, $postPlatform->attachesLinkPreview());
     }
 
     private function retryWithRefresh(PostPlatform $postPlatform, ?string $content, TokenExpiredException $originalException): array
@@ -133,7 +134,7 @@ abstract class AbstractLinkedInPublisher
         }
     }
 
-    private function publishPost(?string $content, $media): array
+    private function publishPost(?string $content, $media, bool $attachArticle): array
     {
         $payload = $this->basePayload($content);
 
@@ -147,7 +148,7 @@ abstract class AbstractLinkedInPublisher
                     'altText' => $item->isImage() ? $item->altTextFor($this->platform()) : null,
                 ], fn ($v) => $v !== null)];
             }
-        } else {
+        } elseif ($attachArticle) {
             $article = $this->articleContent($content);
 
             if ($article !== null) {
@@ -231,17 +232,11 @@ abstract class AbstractLinkedInPublisher
     {
         $maxBytes = MediaType::Image->maxSizeInBytes();
 
-        $response = app(SafeHttpFetcher::class)
-            ->guardedRequest($url, followRedirects: false)
-            ->timeout(self::ARTICLE_THUMB_TIMEOUT_SECONDS)
+        $safeHttp = app(SafeHttpFetcher::class);
+
+        $response = $safeHttp
+            ->limitTransfer($safeHttp->guardedRequest($url, followRedirects: false), $maxBytes, timeoutSeconds: self::ARTICLE_THUMB_TIMEOUT_SECONDS)
             ->sink($tempFile)
-            ->withOptions([
-                'progress' => static function ($total, $downloaded) use ($maxBytes): void {
-                    if ($total > $maxBytes || $downloaded > $maxBytes) {
-                        throw new RuntimeException('og:image exceeds the maximum image size');
-                    }
-                },
-            ])
             ->get($url);
 
         if (! $response->successful()) {
@@ -438,7 +433,7 @@ abstract class AbstractLinkedInPublisher
 
         if ($initResponse->failed()) {
             Log::error("{$this->label()} image init failed", ['body' => $this->redactResponseBody($initResponse->body())]);
-            $this->handleApiError($initResponse);
+            $this->handleMediaApiError($initResponse);
         }
 
         $initData = $initResponse->json();
@@ -472,7 +467,7 @@ abstract class AbstractLinkedInPublisher
 
         if ($uploadResponse->failed()) {
             Log::error("{$this->label()} image upload failed", ['body' => $this->redactResponseBody($uploadResponse->body())]);
-            $this->handleApiError($uploadResponse);
+            $this->handleMediaApiError($uploadResponse);
         }
 
         return $imageUrn;
@@ -507,7 +502,7 @@ abstract class AbstractLinkedInPublisher
 
         if ($initResponse->failed()) {
             Log::error("{$this->label()} video init failed", ['body' => $this->redactResponseBody($initResponse->body())]);
-            $this->handleApiError($initResponse);
+            $this->handleMediaApiError($initResponse);
         }
 
         $initData = $initResponse->json();
@@ -545,7 +540,7 @@ abstract class AbstractLinkedInPublisher
                         'index' => $index,
                         'body' => $this->redactResponseBody($chunkResponse->body()),
                     ]);
-                    $this->handleApiError($chunkResponse);
+                    $this->handleMediaApiError($chunkResponse);
                 }
 
                 $etag = $chunkResponse->header('etag');
@@ -571,7 +566,7 @@ abstract class AbstractLinkedInPublisher
 
         if ($finalizeResponse->failed()) {
             Log::error("{$this->label()} video finalize failed", ['body' => $this->redactResponseBody($finalizeResponse->body())]);
-            $this->handleApiError($finalizeResponse);
+            $this->handleMediaApiError($finalizeResponse);
         }
 
         $this->waitForProcessing('videos', $videoUrn, 'video');
@@ -588,7 +583,7 @@ abstract class AbstractLinkedInPublisher
 
         if ($initResponse->failed()) {
             Log::error("{$this->label()} document init failed", ['body' => $this->redactResponseBody($initResponse->body())]);
-            $this->handleApiError($initResponse);
+            $this->handleMediaApiError($initResponse);
         }
 
         $initData = $initResponse->json();
@@ -622,7 +617,7 @@ abstract class AbstractLinkedInPublisher
 
             if ($uploadResponse->failed()) {
                 Log::error("{$this->label()} document upload failed", ['body' => $this->redactResponseBody($uploadResponse->body())]);
-                $this->handleApiError($uploadResponse);
+                $this->handleMediaApiError($uploadResponse);
             }
         } finally {
             @unlink($tempFile);
@@ -721,6 +716,22 @@ abstract class AbstractLinkedInPublisher
     private function label(): string
     {
         return $this->platform()->label();
+    }
+
+    /**
+     * Media steps run before the post exists, so a LinkedIn 5xx there is
+     * safe to retry; anything else is classified like a post failure.
+     */
+    private function handleMediaApiError(Response $response): never
+    {
+        if ($response->serverError()) {
+            throw new PlatformUnavailableException(
+                "{$this->label()} returned {$response->status()} while uploading media",
+                $response->status(),
+            );
+        }
+
+        $this->handleApiError($response);
     }
 
     private function handleApiError(Response $response): never

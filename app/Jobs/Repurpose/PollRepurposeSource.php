@@ -37,6 +37,11 @@ class PollRepurposeSource implements ShouldBeUnique, ShouldQueue
 
     public bool $deleteWhenMissingModels = true;
 
+    private const STRANDED_AFTER_MINUTES = 30;
+
+    /** @var array<string, string|null> */
+    private array $downloadUrls = [];
+
     public function __construct(public SocialAccount $account)
     {
         $this->onQueue($account->platform->queue());
@@ -55,7 +60,7 @@ class PollRepurposeSource implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        if ($this->account->disconnected_at !== null || $this->account->is_active === false) {
+        if ($this->account->disconnected_at !== null) {
             $this->reschedule($repurposes);
 
             return;
@@ -75,8 +80,14 @@ class PollRepurposeSource implements ShouldBeUnique, ShouldQueue
 
         $publishedByUs = $this->idsPublishedByTryPost($media);
 
-        foreach ($repurposes as $repurpose) {
-            $this->queueNewMedia($repurpose, $media, $publishedByUs);
+        try {
+            foreach ($repurposes as $repurpose) {
+                $this->queueNewMedia($repurpose, $media, $publishedByUs);
+            }
+        } catch (Throwable $exception) {
+            $this->recordFailure($repurposes, $exception);
+
+            return;
         }
 
         $this->markPolled($repurposes);
@@ -127,32 +138,77 @@ class PollRepurposeSource implements ShouldBeUnique, ShouldQueue
      */
     private function recordMedia(Repurpose $repurpose, SourceMedia $entry, array $publishedByUs): void
     {
-        $item = RepurposeItem::firstOrCreate(
-            ['repurpose_id' => $repurpose->id, 'source_media_id' => $entry->id],
-            [
-                'status' => ItemStatus::Pending,
-                'source_permalink' => $entry->permalink,
-                'source_created_at' => $entry->createdAt,
-            ],
-        );
+        $item = RepurposeItem::query()
+            ->where('repurpose_id', $repurpose->id)
+            ->where('source_media_id', $entry->id)
+            ->first();
 
-        if (! $item->wasRecentlyCreated) {
+        if ($item !== null) {
+            if ($this->isStranded($item)) {
+                $this->process($item, $entry);
+            }
+
             return;
         }
 
         if (in_array($entry->id, $publishedByUs, true)) {
-            $item->update(['status' => ItemStatus::Skipped, 'reason' => ItemReason::PublishedViaTrypost]);
+            $this->createItem($repurpose, $entry, ['status' => ItemStatus::Skipped, 'reason' => ItemReason::PublishedViaTrypost]);
 
             return;
         }
 
-        if (blank($entry->downloadUrl)) {
+        $downloadUrl = $this->downloadUrl($entry);
+
+        $item = $this->createItem($repurpose, $entry, blank($downloadUrl)
+            ? ['status' => ItemStatus::Skipped, 'reason' => ItemReason::MediaUrlMissing]
+            : ['status' => ItemStatus::Pending]);
+
+        if ($item->wasRecentlyCreated && $item->status === ItemStatus::Pending) {
+            ProcessRepurposeItem::dispatch($item, (string) $downloadUrl, $entry->caption);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function createItem(Repurpose $repurpose, SourceMedia $entry, array $attributes): RepurposeItem
+    {
+        return RepurposeItem::firstOrCreate(
+            ['repurpose_id' => $repurpose->id, 'source_media_id' => $entry->id],
+            [
+                ...$attributes,
+                'source_permalink' => $entry->permalink,
+                'source_created_at' => $entry->createdAt,
+            ],
+        );
+    }
+
+    private function isStranded(RepurposeItem $item): bool
+    {
+        return $item->status === ItemStatus::Pending
+            && $item->created_at->lessThanOrEqualTo(now()->subMinutes(self::STRANDED_AFTER_MINUTES));
+    }
+
+    private function process(RepurposeItem $item, SourceMedia $entry): void
+    {
+        $downloadUrl = $this->downloadUrl($entry);
+
+        if (blank($downloadUrl)) {
             $item->update(['status' => ItemStatus::Skipped, 'reason' => ItemReason::MediaUrlMissing]);
 
             return;
         }
 
-        ProcessRepurposeItem::dispatch($item, (string) $entry->downloadUrl, $entry->caption);
+        ProcessRepurposeItem::dispatch($item, $downloadUrl, $entry->caption);
+    }
+
+    private function downloadUrl(SourceMedia $entry): ?string
+    {
+        if (! array_key_exists($entry->id, $this->downloadUrls)) {
+            $this->downloadUrls[$entry->id] = $entry->resolveDownloadUrl();
+        }
+
+        return $this->downloadUrls[$entry->id];
     }
 
     /**
@@ -169,7 +225,9 @@ class PollRepurposeSource implements ShouldBeUnique, ShouldQueue
 
         return PostPlatform::query()
             ->whereIn('platform_post_id', $ids)
-            ->whereHas('post', fn (Builder $query) => $query->where('workspace_id', $this->account->workspace_id))
+            ->whereHas('post', fn (Builder $query) => $query
+                ->createdInTryPost()
+                ->where('workspace_id', $this->account->workspace_id))
             ->pluck('platform_post_id')
             ->all();
     }
