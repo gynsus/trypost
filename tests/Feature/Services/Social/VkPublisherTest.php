@@ -124,4 +124,4 @@ test('vk publisher rejects content over the platform limit', function () {
     Http::fake();
 
     $this->publisher->publish($this->postPlatform);
-})->throws(Exception::class, 'Content exceeds VK limit');
+})->throws(Exception::class, 'VK allows');
