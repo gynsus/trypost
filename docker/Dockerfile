@@ -53,13 +53,14 @@ RUN apk add --no-cache \
         pcntl \
         intl \
         sockets \
-    && curl -fsSL -o /usr/local/bin/install-php-extensions \
-        https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions \
-    && chmod +x /usr/local/bin/install-php-extensions \
     # pecl.php.net is winding down its REST interface, so `pecl install`
-    # fails with "does not have REST info xml available" on fresh images;
-    # install-php-extensions fetches the sources from GitHub instead.
-    && install-php-extensions redis imagick \
+    # (and installers that wrap it) fail with "does not have REST info xml
+    # available"; redis and imagick are built from their GitHub releases.
+    && curl -fsSL https://github.com/phpredis/phpredis/archive/refs/tags/6.3.0.tar.gz | tar xz -C /tmp \
+    && (cd /tmp/phpredis-6.3.0 && phpize && ./configure && make -j"$(nproc)" && make install) \
+    && curl -fsSL https://github.com/Imagick/imagick/archive/refs/tags/3.8.1.tar.gz | tar xz -C /tmp \
+    && (cd /tmp/imagick-3.8.1 && phpize && ./configure && make -j"$(nproc)" && make install) \
+    && docker-php-ext-enable redis imagick \
     && apk del $PHPIZE_DEPS \
     && rm -rf /tmp/* /var/cache/apk/*
 
