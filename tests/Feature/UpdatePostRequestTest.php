@@ -2,22 +2,174 @@
 
 declare(strict_types=1);
 
+use App\Dto\MediaItem;
 use App\Enums\GoogleBusiness\TopicType;
 use App\Enums\Post\Status;
 use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
 use App\Enums\TikTok\PrivacyLevel;
-use App\Enums\UserWorkspace\Role;
+use App\Jobs\PublishPost;
+use App\Models\Media;
 use App\Models\Post;
 use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
+
+test('youtube description checks effective web metadata before scheduling or publishing', function (string $patch, bool $allowed, string $status) {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+    $this->post->update([
+        'content' => 'Short title',
+        'status' => Status::Draft,
+        'media' => $this->mediaPayload,
+    ]);
+    $this->postPlatform->update(['enabled' => false]);
+    $platform = PostPlatform::factory()->youtube()->create([
+        'post_id' => $this->post->id,
+        'social_account_id' => $account->id,
+        'enabled' => true,
+        'meta' => ['description' => str_repeat('a', 5001)],
+    ]);
+    $data = [
+        'status' => $status,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'media' => $this->mediaPayload,
+    ];
+
+    if ($patch !== 'omit') {
+        $data['meta'] = $patch === 'row' ? [] : ['description' => $patch === 'clear' ? null : 'Valid description'];
+    }
+    Queue::fake();
+    $response = $this->actingAs($this->user)->put(route('app.posts.update', $this->post), $data);
+
+    if ($allowed) {
+        $response->assertSessionHasNoErrors();
+        expect($this->post->fresh()->status->value)->toBe($status);
+
+        if ($status === Status::Publishing->value) {
+            Queue::assertPushed(PublishPost::class);
+        }
+    } else {
+        $response->assertSessionHasErrors('destinations.0.meta.description');
+        expect($this->post->fresh()->status)->toBe(Status::Draft);
+        Queue::assertNotPushed(PublishPost::class);
+    }
+})->with([
+    'stored invalid description' => ['omit', false],
+    'retained invalid description' => ['row', false],
+    'replaced description' => ['replace', true],
+    'cleared description' => ['clear', true],
+])->with([Status::Scheduled->value, Status::Publishing->value]);
+
+test('youtube description reports and persists independent selected channel values', function () {
+    $platforms = collect(range(1, 2))->map(function () {
+        $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+
+        return PostPlatform::factory()->youtube()->create([
+            'post_id' => $this->post->id,
+            'social_account_id' => $account->id,
+            'meta' => [],
+        ]);
+    });
+    $this->actingAs($this->user)->put(route('app.posts.update', $this->post), [
+        'status' => Status::Draft->value,
+        'platforms' => [
+            ['id' => $platforms[0]->id, 'meta' => ['description' => 'First channel']],
+            ['id' => $platforms[1]->id, 'meta' => ['description' => str_repeat('é', 2501)]],
+        ],
+    ])->assertSessionHasErrors('platforms.1.meta.description')->assertSessionDoesntHaveErrors('platforms.0.meta.description');
+    $this->actingAs($this->user)->put(route('app.posts.update', $this->post), [
+        'status' => Status::Draft->value,
+        'content' => 'Short title',
+        'platforms' => [
+            ['id' => $platforms[0]->id, 'meta' => ['description' => 'First channel']],
+            ['id' => $platforms[1]->id, 'meta' => ['description' => str_repeat('é', 2500)]],
+        ],
+    ])->assertSessionHasNoErrors();
+    expect(data_get($platforms[0]->fresh()->meta, 'description'))->toBe('First channel')
+        ->and(data_get($platforms[1]->fresh()->meta, 'description'))->toBe(str_repeat('é', 2500))
+        ->and($this->post->fresh()->content)->toBe('Short title');
+});
+
+test('youtube description update reports one validation message', function (bool $hasSubmittedError) {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+    $platform = PostPlatform::factory()->youtube()->create([
+        'post_id' => $this->post->id,
+        'social_account_id' => $account->id,
+        'meta' => ['description' => str_repeat('a', 5001)],
+    ]);
+    $data = [
+        'status' => Status::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'content' => 'Short title',
+        'media' => $this->mediaPayload,
+        'platforms' => [[
+            'id' => $platform->id,
+            'content_type' => ContentType::YouTubeShort->value,
+        ]],
+    ];
+    $key = 'platforms.0.meta.description';
+
+    if ($hasSubmittedError) {
+        $data['platforms'][0]['meta'] = ['description' => str_repeat('é', 2501)];
+    }
+
+    $this->actingAs($this->user)->put(route('app.posts.update', $this->post), $data)
+        ->assertSessionHasErrors($key);
+
+    expect(session('errors')->get($key))->toBe([
+        __('posts.form.youtube.description_max'),
+    ]);
+})->with([
+    'stored invalid description' => [false],
+    'submitted invalid description' => [true],
+]);
+
+test('youtube description validation keeps submitted channel order and rolls back updates', function () {
+    $account = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+    $platform = PostPlatform::factory()->youtube()->create([
+        'post_id' => $this->post->id,
+        'social_account_id' => $account->id,
+        'enabled' => true,
+        'meta' => ['description' => str_repeat('a', 5001)],
+    ]);
+    $secondAccount = SocialAccount::factory()->youtube()->create(['workspace_id' => $this->workspace->id]);
+    $secondPlatform = PostPlatform::factory()->youtube()->create([
+        'post_id' => $this->post->id,
+        'social_account_id' => $secondAccount->id,
+        'enabled' => false,
+        'meta' => ['description' => 'Valid description'],
+    ]);
+    $this->post->update(['content' => 'Original title']);
+
+    $this->actingAs($this->user)->put(route('app.posts.update', $this->post), [
+        'status' => Status::Scheduled->value,
+        'scheduled_at' => now()->addHour()->toIso8601String(),
+        'content' => 'Changed title',
+        'media' => $this->mediaPayload,
+        'platforms' => [
+            ['id' => $secondPlatform->id, 'content_type' => ContentType::YouTubeShort->value],
+            ['id' => $platform->id, 'content_type' => ContentType::YouTubeShort->value],
+        ],
+    ])->assertSessionHasErrors('platforms.1.meta.description')
+        ->assertSessionDoesntHaveErrors('platforms.0.meta.description');
+
+    expect($this->post->fresh()->status)->toBe(Status::Draft)
+        ->and($this->post->fresh()->content)->toBe('Original title')
+        ->and($this->post->fresh()->scheduled_at)->toBeNull()
+        ->and($platform->fresh()->enabled)->toBeTrue()
+        ->and($secondPlatform->fresh()->enabled)->toBeFalse()
+        ->and($this->postPlatform->fresh()->enabled)->toBeTrue();
+});
 
 beforeEach(function () {
+    Storage::fake();
     $this->user = User::factory()->create();
     $this->workspace = Workspace::factory()->create(['user_id' => $this->user->id]);
-    $this->workspace->members()->attach($this->user->id, ['role' => Role::Member->value]);
+    $this->workspace->members()->attach($this->user->id, membershipPivot('member'));
     $this->user->update(['current_workspace_id' => $this->workspace->id]);
 
     $this->post = Post::factory()->create([
@@ -26,16 +178,11 @@ beforeEach(function () {
     ]);
 
     // Media payload used by tests that need to satisfy ContentTypeCompatibleWithMedia.
-    $this->mediaPayload = [
-        [
-            'id' => 'test-media-video',
-            'path' => 'media/2026-01/test-video.mp4',
-            'url' => 'https://example.com/media/2026-01/test-video.mp4',
-            'type' => 'video',
-            'mime_type' => 'video/mp4',
-            'original_filename' => 'test-video.mp4',
-        ],
-    ];
+    $video = Media::factory()->stored()->video()->temporaryUpload($this->workspace)->create([
+        'size' => 100_000,
+        'meta' => ['duration' => 30],
+    ]);
+    $this->mediaPayload = [MediaItem::fromMedia($video)->toArray()];
     $this->socialAccount = SocialAccount::factory()->create([
         'workspace_id' => $this->workspace->id,
         'platform' => Platform::TikTok,
@@ -664,13 +811,14 @@ test('scheduling across multiple platforms enforces the strictest content-length
 });
 
 test('draft save accepts media source metadata for ai regeneration', function () {
+    $asset = Media::factory()->stored()->temporaryUpload($this->workspace)->create([
+        'path' => 'ai-images/generated.webp',
+        'original_filename' => 'generated.webp',
+        'mime_type' => 'image/webp',
+    ]);
     $payload = [
         [
-            'id' => 'media-ai-keep-meta',
-            'path' => 'ai-images/generated.webp',
-            'url' => 'https://example.com/ai-images/generated.webp',
-            'type' => 'image',
-            'mime_type' => 'image/webp',
+            ...MediaItem::fromMedia($asset)->toArray(),
             'source' => 'ai',
             'source_meta' => [
                 'title' => 'Fix ECP typo',
@@ -686,7 +834,7 @@ test('draft save accepts media source metadata for ai regeneration', function ()
         ->put(route('app.posts.update', $this->post), [
             'status' => Status::Draft->value,
             'media' => $payload,
-            'platforms' => [],
+            'platforms' => [['id' => $this->postPlatform->id]],
         ]);
 
     $response->assertSessionDoesntHaveErrors();
@@ -694,6 +842,28 @@ test('draft save accepts media source metadata for ai regeneration', function ()
     $this->post->refresh();
     expect(data_get($this->post->media, '0.source'))->toBe('ai');
     expect(data_get($this->post->media, '0.source_meta.title'))->toBe('Fix ECP typo');
+});
+
+test('the web update accepts a compatible type change for the fixed account', function () {
+    $this->socialAccount->update(['platform' => Platform::Instagram]);
+    $this->postPlatform->update([
+        'platform' => Platform::Instagram,
+        'content_type' => ContentType::InstagramFeed,
+    ]);
+    $video = Media::factory()->stored()->video()->temporaryUpload($this->workspace)->create();
+
+    $response = $this->actingAs($this->user)
+        ->put(route('app.posts.update', $this->post), [
+            'status' => Status::Scheduled->value,
+            'scheduled_at' => now()->addDay()->toIso8601String(),
+            'content' => 'Reel atualizado',
+            'media' => [MediaItem::fromMedia($video)->toArray()],
+            'content_type' => ContentType::InstagramReel->value,
+        ]);
+
+    $response->assertSessionDoesntHaveErrors();
+    expect($this->postPlatform->fresh()->content_type)->toBe(ContentType::InstagramReel)
+        ->and($this->post->fresh()->content)->toBe('Reel atualizado');
 });
 
 test('instagram_carousel is rejected as a content_type — carousel is a feed post with multiple images', function () {
@@ -1258,4 +1428,23 @@ test('publishing a google business post with a url-needing cta and no url is rej
         ]);
 
     $response->assertSessionHasErrors('platforms.0.meta.call_to_action.url');
+});
+
+test('a legacy giphy media source blocks the edit until the migration clears it', function () {
+    $item = [...$this->mediaPayload[0], 'source' => 'giphy', 'source_meta' => ['attribution' => 'GIPHY']];
+    $this->post->update(['media' => [$item]]);
+    $payload = fn (array $media): array => ['status' => Status::Draft->value, 'media' => $media];
+
+    $this->actingAs($this->user)
+        ->put(route('app.posts.update', $this->post), $payload($this->post->fresh()->media))
+        ->assertSessionHasErrors('media.0.source');
+
+    $migration = require database_path('migrations/2026_10_06_111329_clear_giphy_source_from_stored_media.php');
+    $migration->up();
+
+    expect(DB::table('posts')->where('id', $this->post->id)->exists())->toBeTrue();
+
+    $this->actingAs($this->user)
+        ->put(route('app.posts.update', $this->post), $payload($this->post->fresh()->media))
+        ->assertSessionDoesntHaveErrors('media.0.source');
 });

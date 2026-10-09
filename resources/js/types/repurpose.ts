@@ -17,13 +17,6 @@ export interface SourceFormatOption {
     label: string;
 }
 
-export interface FlowNode {
-    platform: string;
-    label?: string | null;
-    username?: string | null;
-    format?: string | null;
-}
-
 export interface RepurposeDestination {
     social_account_id: string;
     content_type: string;

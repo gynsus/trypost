@@ -89,7 +89,29 @@ test('tiktok publisher can publish video', function () {
     });
 });
 
-test('tiktok publisher persists the public video url when status omits the post id', function () {
+test('tiktok publisher keeps the public post id returned as an integer or string', function (int|string $postId) {
+    $this->postPlatform->update(['error_context' => ['tiktok_publish_id' => 'p_pub_url~123']]);
+
+    Http::fake([
+        $this->api.'/post/publish/status/fetch/' => Http::response([
+            'data' => [
+                'status' => 'PUBLISH_COMPLETE',
+                'publicaly_available_post_id' => [$postId],
+            ],
+        ]),
+    ]);
+
+    $result = $this->publisher->publish($this->postPlatform->fresh());
+
+    expect($result['id'])->toBe('7694308097568836885')
+        ->and($result['url'])->toBe('https://www.tiktok.com/@tiktoker/video/7694308097568836885');
+    Http::assertSentCount(1);
+})->with([
+    'integer id' => 7694308097568836885,
+    'string id' => '7694308097568836885',
+]);
+
+test('tiktok publisher persists the public video url when status omits the post id', function (array $statusData) {
     $this->post->update([
         'content' => 'Construam produtos globais e faturem em dólar.',
         'media' => [[
@@ -109,7 +131,7 @@ test('tiktok publisher persists the public video url when status omits the post 
         $this->api.'/post/publish/status/fetch/' => Http::response([
             'data' => [
                 'status' => 'PUBLISH_COMPLETE',
-                'publicaly_available_post_id' => [],
+                ...$statusData,
             ],
         ], 200),
         $this->api.'/video/list/*' => Http::response([
@@ -129,7 +151,13 @@ test('tiktok publisher persists the public video url when status omits the post 
 
     expect($result['id'])->toBe('7682891910226234644')
         ->and($result['url'])->toBe('https://www.tiktok.com/@tiktoker/video/7682891910226234644');
-});
+})->with([
+    'empty list' => [['publicaly_available_post_id' => []]],
+    'missing field' => [[]],
+    'null id' => [['publicaly_available_post_id' => [null]]],
+    'empty id' => [['publicaly_available_post_id' => ['']]],
+    'blank id' => [['publicaly_available_post_id' => ['   ']]],
+]);
 
 test('tiktok publisher does not report success before processing completes', function () {
     $this->post->update([
@@ -640,7 +668,9 @@ test('tiktok publisher throws TokenExpiredException when refresh_token is reject
 
     Http::fake([
         $this->api.'/oauth/token/' => Http::response([
-            'error' => ['code' => 'invalid_grant', 'message' => 'Refresh token expired'],
+            'error' => 'invalid_grant',
+            'error_description' => 'Refresh token expired',
+            'log_id' => '20261007182924',
         ], 400),
     ]);
 
@@ -838,6 +868,10 @@ test('tiktok publisher sends meta settings in video publish request', function (
         $this->api.'/post/publish/status/fetch/' => Http::response([
             'data' => ['status' => 'PUBLISH_COMPLETE'],
         ], 200),
+        $this->api.'/video/list/*' => Http::response([
+            'data' => ['videos' => [], 'has_more' => false],
+            'error' => ['code' => 'ok'],
+        ]),
     ]);
 
     $this->publisher->publish($this->postPlatform);
@@ -984,6 +1018,10 @@ test('tiktok publisher uses default settings when only privacy_level is set', fu
         $this->api.'/post/publish/status/fetch/' => Http::response([
             'data' => ['status' => 'PUBLISH_COMPLETE'],
         ], 200),
+        $this->api.'/video/list/*' => Http::response([
+            'data' => ['videos' => [], 'has_more' => false],
+            'error' => ['code' => 'ok'],
+        ]),
     ]);
 
     $this->publisher->publish($this->postPlatform);
@@ -1495,3 +1533,30 @@ test('tiktok publisher keeps links intact', function () {
     Http::assertSent(fn ($request) => str_contains($request->url(), '/video/init/')
         && data_get($request->data(), 'post_info.title') === 'New post: https://acme.com/blog');
 });
+
+test('tiktok video sends the chosen cover frame as video_cover_timestamp_ms', function (?int $coverOffsetMs) {
+    $this->post->update([
+        'media' => [[
+            'id' => 'test-media-video',
+            'path' => 'media/2026-01/test-video.mp4',
+            'url' => 'https://example.com/media/2026-01/test-video.mp4',
+            'mime_type' => 'video/mp4',
+            'original_filename' => 'test-video.mp4',
+            'meta' => array_filter(['duration' => 10, 'cover_offset_ms' => $coverOffsetMs], fn (mixed $value): bool => $value !== null),
+        ]],
+    ]);
+
+    Http::fake([
+        "{$this->api}/post/publish/video/init/" => Http::response(['data' => ['publish_id' => 'pub_cover']]),
+        "{$this->api}/post/publish/status/fetch/" => Http::response(['data' => ['status' => 'PUBLISH_COMPLETE', 'publish_id' => 'pub_cover']]),
+    ]);
+
+    $this->publisher->publish($this->postPlatform);
+
+    Http::assertSent(fn ($request): bool => $request->url() === "{$this->api}/post/publish/video/init/"
+        && data_get($request->data(), 'post_info.video_cover_timestamp_ms') === $coverOffsetMs
+        && array_key_exists('video_cover_timestamp_ms', data_get($request->data(), 'post_info')) === ($coverOffsetMs !== null));
+})->with([
+    'offset of 1.5 s' => [1500],
+    'no offset' => [null],
+]);
