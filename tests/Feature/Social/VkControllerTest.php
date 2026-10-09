@@ -113,7 +113,7 @@ test('finish refuses a wall the token was never offered', function () {
     ])->assertRedirect(route('app.social.connect.show', Platform::Vk));
 
     finishSocialConnect(Platform::Vk, ['vk:-999999'])
-        ->assertSessionHasErrors('identities');
+        ->assertSessionHasErrors('identities.0');
 
     $this->assertDatabaseMissing('social_accounts', [
         'workspace_id' => $this->workspace->id,
