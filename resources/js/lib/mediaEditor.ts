@@ -140,7 +140,7 @@ export const editorTabsFor = (
             ...(rules.some((rule) => rule.supportsVideoCover)
                 ? (['thumbnail'] as const)
                 : []),
-            ...(rules.some((rule) => rule.supportsAltText)
+            ...(rules.some((rule) => rule.supportsVideoAltText)
                 ? (['alt'] as const)
                 : []),
         ];
