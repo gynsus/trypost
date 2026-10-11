@@ -198,7 +198,7 @@ return [
         'description' => 'In einer Community oder auf deiner Pinnwand veröffentlichen',
         'access_token' => 'Zugriffstoken',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'Empfohlen: ein <strong>Community-Zugriffstoken</strong> (Community → Verwalten → API-Nutzung → Zugriffstokens; Fotos, Wall und Community-Verwaltung erlauben) — das Veröffentlichen funktioniert mit jedem App-Typ. Video-Upload erlaubt VK mit Community-Tokens nicht. Ein <strong>Benutzer-Zugriffstoken</strong> mit den Berechtigungen <em>wall, photos, groups, video, offline</em> funktioniert ebenfalls, aber Wall-Posts erlaubt VK nur Standalone-Apps.',
+        'access_token_hint' => 'Empfohlen: ein <strong>Community-Zugriffstoken</strong> (Community → Verwalten → API-Nutzung → Zugriffstokens; Fotos, Wall und Community-Verwaltung erlauben) — das Veröffentlichen funktioniert mit jedem App-Typ. Video-Upload und Beitragsstatistiken erlaubt VK mit Community-Tokens nicht. Ein <strong>Benutzer-Zugriffstoken</strong> mit den Berechtigungen <em>wall, photos, groups, video, offline</em> funktioniert ebenfalls, aber Wall-Posts erlaubt VK nur Standalone-Apps.',
         'pick_target' => 'Wo veröffentlichen?',
         'target_group' => 'Community',
         'target_profile' => 'Persönliches Profil',

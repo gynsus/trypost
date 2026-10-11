@@ -22,6 +22,16 @@ class VkApi
     }
 
     /**
+     * The API version every request must carry as its `v` parameter. Callers
+     * that authenticate through the Authorization header (the analytics
+     * collectors) send this alone, keeping the token out of the query string.
+     */
+    public static function version(): string
+    {
+        return (string) config('trypost.platforms.vk.api_version');
+    }
+
+    /**
      * Parameters every request must carry: the access token and API version.
      *
      * @return array{access_token: string, v: string}

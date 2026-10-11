@@ -196,7 +196,7 @@ return [
         'description' => '发布到社群或您自己的动态墙',
         'access_token' => '访问令牌',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => '推荐使用<strong>社区访问令牌</strong>(社区 → 管理 → API 使用 → 访问令牌;授予照片、留言墙和社区管理权限)—— 任何应用类型都可发布。VK 不允许使用社区令牌上传视频。带有 <em>wall, photos, groups, video, offline</em> 权限的<strong>用户令牌</strong>也可以,但 VK 仅允许 standalone 应用发布到留言墙。',
+        'access_token_hint' => '推荐使用<strong>社区访问令牌</strong>(社区 → 管理 → API 使用 → 访问令牌;授予照片、留言墙和社区管理权限)—— 任何应用类型都可发布。VK 不允许使用社区令牌上传视频或读取帖子统计数据。带有 <em>wall, photos, groups, video, offline</em> 权限的<strong>用户令牌</strong>也可以,但 VK 仅允许 standalone 应用发布到留言墙。',
         'pick_target' => '选择发布位置',
         'target_group' => '社群',
         'target_profile' => '个人主页',
