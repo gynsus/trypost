@@ -56,6 +56,19 @@ test('vk connect page can be rendered', function () {
     $response->assertInertia(fn (AssertableInertia $page) => $page->component('accounts/VkConnect'));
 });
 
+test('validation errors reach the connect page as strings, not arrays', function () {
+    $this->actingAs($this->user)
+        ->from(route('app.social.vk.connect'))
+        ->post(route('app.social.vk.store'), [])
+        ->assertRedirect(route('app.social.vk.connect'));
+
+    $this->actingAs($this->user)
+        ->get(route('app.social.vk.connect'))
+        ->assertInertia(fn (AssertableInertia $page) => $page
+            ->component('accounts/VkConnect')
+            ->where('errors.access_token', fn ($message) => is_string($message) && $message !== ''));
+});
+
 test('submitting a valid token offers the manageable walls on the confirmation page', function () {
     Http::fake(fakeVkIdentity($this->api));
 

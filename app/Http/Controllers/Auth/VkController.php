@@ -48,7 +48,6 @@ class VkController extends SocialController
         $this->rememberConnectSession($request, $workspace);
 
         return Inertia::render('accounts/VkConnect', [
-            'errors' => session('errors')?->getBag('default')?->toArray() ?? [],
             'backUrl' => PendingConnection::current()?->returnUrl() ?? PendingConnection::defaultReturnUrl(),
         ]);
     }
@@ -76,7 +75,6 @@ class VkController extends SocialController
                 // for the community address and the token is checked against it.
                 if (! $request->filled('community')) {
                     return Inertia::render('accounts/VkConnect', [
-                        'errors' => [],
                         'communityToken' => true,
                         'backUrl' => PendingConnection::current()?->returnUrl() ?? PendingConnection::defaultReturnUrl(),
                     ]);

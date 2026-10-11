@@ -801,6 +801,7 @@ enum ContentType: string
             self::FacebookPost => false,
             self::DiscordMessage => false,
             self::GoogleBusinessPost => false,
+            self::VkPost => false,
             default => true,
         };
     }
