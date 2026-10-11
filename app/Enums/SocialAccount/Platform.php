@@ -48,7 +48,7 @@ enum Platform: string
     {
         return match ($this) {
             self::LinkedIn, self::LinkedInPage, self::Telegram,
-            self::Discord, self::GoogleBusiness, self::Vk => false,
+            self::Discord, self::GoogleBusiness => false,
             default => true,
         };
     }
