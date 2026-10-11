@@ -58,6 +58,7 @@ return [
         'telegram' => 'Kanal veya grup',
         'discord' => 'Sunucu',
         'google_business' => 'İşletme profili',
+        'vk' => 'Profil veya topluluk',
     ],
 
     'details' => [

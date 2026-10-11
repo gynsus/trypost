@@ -775,6 +775,10 @@ return [
             'label' => 'Gönderi',
             'description' => 'İşletme Profilinde Arama ve Haritalar\'da görünür',
         ],
+        'vk_post' => [
+            'label' => 'Gönderi',
+            'description' => 'İsteğe bağlı medya içeren metin gönderisi',
+        ],
     ],
 
     'platforms' => [
