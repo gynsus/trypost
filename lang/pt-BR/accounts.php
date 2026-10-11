@@ -196,7 +196,7 @@ return [
         'description' => 'Publique em uma comunidade ou no seu mural',
         'access_token' => 'Token de acesso',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'Recomendado: um <strong>token de acesso da comunidade</strong> (comunidade → Gerenciar → Uso da API → Tokens de acesso; conceda fotos, mural e gestão da comunidade) — a publicação funciona com qualquer tipo de app. O VK não permite envio de vídeo com tokens de comunidade. Um <strong>token de usuário</strong> com os escopos <em>wall, photos, groups, video, offline</em> também funciona, mas o VK só permite postar no mural para apps standalone.',
+        'access_token_hint' => 'Recomendado: um <strong>token de acesso da comunidade</strong> (comunidade → Gerenciar → Uso da API → Tokens de acesso; conceda fotos, mural e gestão da comunidade) — a publicação funciona com qualquer tipo de app. O VK não permite envio de vídeo nem estatísticas de posts com tokens de comunidade. Um <strong>token de usuário</strong> com os escopos <em>wall, photos, groups, video, offline</em> também funciona, mas o VK só permite postar no mural para apps standalone.',
         'pick_target' => 'Onde publicar',
         'target_group' => 'Comunidade',
         'target_profile' => 'Perfil pessoal',

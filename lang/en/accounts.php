@@ -196,7 +196,7 @@ return [
         'description' => 'Publish to a community or your profile wall',
         'access_token' => 'Access token',
         'access_token_placeholder' => 'vk1.a.…',
-        'access_token_hint' => 'Recommended: a <strong>community access token</strong> (community → Manage → API usage → Access tokens; grant photos, wall and community management) — publishing works with any app type. VK does not allow video upload with community tokens. A <strong>user access token</strong> with the <em>wall, photos, groups, video, offline</em> scopes also works, but VK only lets standalone apps post to walls.',
+        'access_token_hint' => 'Recommended: a <strong>community access token</strong> (community → Manage → API usage → Access tokens; grant photos, wall and community management) — publishing works with any app type. VK does not allow video upload or post analytics with community tokens. A <strong>user access token</strong> with the <em>wall, photos, groups, video, offline</em> scopes also works, but VK only lets standalone apps post to walls.',
         'pick_target' => 'Choose where to publish',
         'target_group' => 'Community',
         'target_profile' => 'Personal profile',

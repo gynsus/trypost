@@ -16,8 +16,22 @@ class VkPublicationCollector extends AbstractPublicationHistoryCollector
 {
     private const PAGE_SIZE = 100;
 
+    private const PARTIAL_REASON = 'vk_reconnect_with_user_token_for_history';
+
     public function page(SocialAccount $account, ?string $cursor, CarbonImmutable $cutoff): PublicationPage
     {
+        if (filled(data_get($account->meta, 'community_token'))) {
+            // VK refuses every wall read with a community token (error 27),
+            // so the wall's history can only be imported once the channel is
+            // reconnected with a user token. Don't spend the request.
+            return new PublicationPage(
+                publications: [],
+                nextCursor: null,
+                providerExhausted: true,
+                partialReason: self::PARTIAL_REASON,
+            );
+        }
+
         $ownerId = VkAnalyticsResponse::ownerId($account);
         $offset = max(0, (int) $cursor);
 

@@ -17,6 +17,16 @@ class VkPublicationMetricsCollector extends AbstractPublicationMetricsCollector
     public function collect(AnalyticsPublication $publication, CarbonImmutable $date): PublicationMetricObservation
     {
         $account = $this->account($publication);
+
+        if (filled(data_get($account->meta, 'community_token'))) {
+            // wall.getById answers error 27 for a community token, like every
+            // other wall read; only a user token can measure posts.
+            throw new AnalyticsCollectionException(
+                'permission',
+                'VK wall reads are unavailable with a community token; reconnect the channel with a user token',
+            );
+        }
+
         $ownerId = VkAnalyticsResponse::ownerId($account);
 
         $data = VkAnalyticsResponse::data($this->get($account, VkApi::endpoint('wall.getById'), [

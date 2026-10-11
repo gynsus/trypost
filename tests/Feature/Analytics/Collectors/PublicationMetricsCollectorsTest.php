@@ -1002,3 +1002,28 @@ test('vk reads the post of the account wall by owner-qualified id', function () 
         && ! isset($request['access_token'])
         && $request->hasHeader('Authorization'));
 });
+
+test('vk refuses post metrics for a community token before any request', function () {
+    Http::fake();
+    $account = SocialAccount::factory()->vk()->create([
+        'meta' => ['owner_id' => -123456, 'is_group' => true, 'community_token' => true],
+    ]);
+    $publication = AnalyticsPublication::factory()->create([
+        'workspace_id' => $account->workspace_id,
+        'social_account_id' => $account->id,
+        'platform' => Platform::Vk,
+        'platform_user_id' => $account->platform_user_id,
+        'remote_id' => '42',
+    ]);
+
+    try {
+        app(VkPublicationMetricsCollector::class)->collect($publication, CarbonImmutable::parse('2026-09-23', 'UTC'));
+        $this->fail('Expected AnalyticsCollectionException');
+    } catch (AnalyticsCollectionException $exception) {
+        expect($exception->category)->toBe('permission');
+    }
+
+    // Connecting the account bootstraps analytics inline, so assert only
+    // that the refusal itself never reached the wall.
+    Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), '/wall.getById'));
+});

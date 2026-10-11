@@ -312,3 +312,21 @@ test('vk hands the next offset as the cursor while the window stays open', funct
     Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/wall.get')
         && $request['offset'] == 100);
 });
+
+test('vk skips history for a community token without spending a request', function () {
+    Http::fake();
+    $account = SocialAccount::factory()->vk()->create([
+        'meta' => ['owner_id' => -123456, 'is_group' => true, 'community_token' => true],
+    ]);
+
+    $page = app(VkPublicationCollector::class)->page(
+        $account,
+        null,
+        CarbonImmutable::parse('2026-01-01', 'UTC'),
+    );
+
+    expect($page->publications)->toBe([])
+        ->and($page->providerExhausted)->toBeTrue()
+        ->and($page->partialReason)->toBe('vk_reconnect_with_user_token_for_history');
+    Http::assertNothingSent();
+});
