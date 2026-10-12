@@ -15,7 +15,7 @@ return [
     'steps' => [
         'persona' => 'À propos de vous',
         'goals' => 'Vos objectifs',
-        'plan' => 'Forfait',
+        'software' => 'Outil actuel',
     ],
     'personas' => [
         'creator' => 'Créateur de contenu',
@@ -39,6 +39,9 @@ return [
         'manage_clients' => 'Gérer marques ou clients',
         'other' => 'Autre chose',
     ],
-    'plan_title' => 'Choisissez votre forfait',
-    'plan_description' => 'Les deux formules ont les mêmes fonctionnalités. Seul le nombre de workspaces change, et vous pouvez changer de formule quand vous voulez.',
+    'software_title' => 'Quel outil utilisez-vous aujourd\'hui ?',
+    'software' => [
+        'none' => 'Je n\'en utilise pas encore',
+        'other' => 'Autre',
+    ],
 ];

@@ -15,7 +15,7 @@ return [
     'steps' => [
         'persona' => '나에 대해',
         'goals' => '목표',
-        'plan' => '요금제',
+        'software' => '현재 도구',
     ],
     'personas' => [
         'creator' => '콘텐츠 크리에이터',
@@ -39,6 +39,9 @@ return [
         'manage_clients' => '브랜드나 고객 관리',
         'other' => '다른 것',
     ],
-    'plan_title' => '요금제 선택',
-    'plan_description' => '두 플랜의 기능은 같습니다. 차이는 워크스페이스 수이고, 플랜은 언제든 바꿀 수 있습니다.',
+    'software_title' => '지금 어떤 도구를 사용하고 있나요?',
+    'software' => [
+        'none' => '아직 사용하지 않아요',
+        'other' => '기타',
+    ],
 ];

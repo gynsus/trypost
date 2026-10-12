@@ -15,7 +15,7 @@ return [
     'steps' => [
         'persona' => 'About you',
         'goals' => 'Your goals',
-        'plan' => 'Plan',
+        'software' => 'Current tool',
     ],
     'personas' => [
         'creator' => 'Content creator',
@@ -39,6 +39,9 @@ return [
         'manage_clients' => 'Manage brands or clients',
         'other' => 'Something else',
     ],
-    'plan_title' => 'Choose your plan',
-    'plan_description' => 'Both plans have the same features. The difference is how many workspaces you get, and you can switch plans whenever you like.',
+    'software_title' => 'Which tool do you use today?',
+    'software' => [
+        'none' => 'I don\'t use one yet',
+        'other' => 'Other',
+    ],
 ];

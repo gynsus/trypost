@@ -15,7 +15,7 @@ return [
     'steps' => [
         'persona' => 'あなたについて',
         'goals' => '目標',
-        'plan' => 'プラン',
+        'software' => '現在のツール',
     ],
     'personas' => [
         'creator' => 'コンテンツクリエイター',
@@ -39,6 +39,9 @@ return [
         'manage_clients' => 'ブランドやクライアントを管理',
         'other' => 'その他',
     ],
-    'plan_title' => 'プランを選ぶ',
-    'plan_description' => '2つのプランの機能は同じです。違いはワークスペースの数だけで、プランはいつでも変更できます。',
+    'software_title' => '今どのツールを使っていますか？',
+    'software' => [
+        'none' => 'まだ使っていない',
+        'other' => 'その他',
+    ],
 ];

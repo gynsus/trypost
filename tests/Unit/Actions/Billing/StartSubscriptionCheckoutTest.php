@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Actions\Billing\StartSubscriptionCheckout;
 use App\Enums\Plan\Slug;
 use App\Enums\User\Persona;
+use App\Enums\User\PreviousSoftware;
 use App\Enums\User\ReferralSource;
 use App\Models\Account;
 use App\Models\Plan;
@@ -83,6 +84,7 @@ test('redirect applies checkout configuration and attribution metadata before op
         'epik' => 'dj0yepik',
         'persona' => Persona::Agency,
         'goals' => ['grow_audience', 'save_time'],
+        'previous_software' => PreviousSoftware::Metricool,
         'referral_source' => ReferralSource::ProductHunt,
     ]);
     $account->refresh();
@@ -106,6 +108,7 @@ test('redirect applies checkout configuration and attribution metadata before op
             'epik' => 'dj0yepik',
             'persona' => 'agency',
             'goals' => 'grow_audience,save_time',
+            'previous_software' => 'metricool',
             'referral_source' => 'product_hunt',
         ])
         ->andReturnSelf();
@@ -253,7 +256,7 @@ test('redirect applies the plan first-month coupon on a monthly price', function
     app(StartSubscriptionCheckout::class)->redirect(
         $accountMock,
         'price_socials_monthly',
-        route('app.welcome.plan'),
+        route('app.welcome.software'),
         $plan,
     );
 });
@@ -293,7 +296,7 @@ test('redirect skips the first-month coupon on a yearly price', function () {
     app(StartSubscriptionCheckout::class)->redirect(
         $accountMock,
         'price_workspaces_yearly',
-        route('app.welcome.plan'),
+        route('app.welcome.software'),
         $plan,
     );
 });
@@ -327,7 +330,7 @@ test('redirect clears a leftover plan_id before opening checkout', function () {
     $accountMock->shouldReceive('createOrGetStripeCustomer')->once()->andReturnNull();
     $accountMock->shouldReceive('newSubscription')->once()->andReturn($builder);
 
-    app(StartSubscriptionCheckout::class)->redirect($accountMock, 'price_monthly_test', route('app.welcome.plan'));
+    app(StartSubscriptionCheckout::class)->redirect($accountMock, 'price_monthly_test', route('app.welcome.software'));
 
     expect($account->fresh()->plan_id)->toBeNull();
 });
@@ -351,7 +354,7 @@ test('redirect creates a new stripe customer with the owner email and the accoun
     $accountMock = Mockery::mock($account)->makePartial();
     $accountMock->shouldReceive('newSubscription')->once()->andReturn(checkoutCustomerBuilder());
 
-    app(StartSubscriptionCheckout::class)->redirect($accountMock, 'price_monthly_test', route('app.welcome.plan'));
+    app(StartSubscriptionCheckout::class)->redirect($accountMock, 'price_monthly_test', route('app.welcome.software'));
 
     expect($client->requests)->toHaveCount(1)
         ->and($client->requests[0]['method'])->toBe('post')
@@ -379,7 +382,7 @@ test('redirect leaves an existing stripe customer untouched', function () {
     $accountMock = Mockery::mock($account)->makePartial();
     $accountMock->shouldReceive('newSubscription')->once()->andReturn(checkoutCustomerBuilder());
 
-    app(StartSubscriptionCheckout::class)->redirect($accountMock, 'price_monthly_test', route('app.welcome.plan'));
+    app(StartSubscriptionCheckout::class)->redirect($accountMock, 'price_monthly_test', route('app.welcome.software'));
 
     expect(collect($client->requests)->pluck('method')->all())->toBe(['get'])
         ->and($client->requests[0]['url'])->toEndWith('/v1/customers/cus_existing')
