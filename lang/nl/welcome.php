@@ -15,7 +15,7 @@ return [
     'steps' => [
         'persona' => 'Over jou',
         'goals' => 'Je doelen',
-        'plan' => 'Abonnement',
+        'software' => 'Huidige tool',
     ],
     'personas' => [
         'creator' => 'Contentmaker',
@@ -39,6 +39,9 @@ return [
         'manage_clients' => 'Merken of klanten beheren',
         'other' => 'Iets anders',
     ],
-    'plan_title' => 'Kies je abonnement',
-    'plan_description' => 'Beide plannen hebben dezelfde functies. Het verschil is het aantal workspaces, en je kunt wisselen wanneer je wilt.',
+    'software_title' => 'Welke tool gebruik je nu?',
+    'software' => [
+        'none' => 'Ik gebruik er nog geen',
+        'other' => 'Andere',
+    ],
 ];

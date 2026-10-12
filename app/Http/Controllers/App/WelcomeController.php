@@ -6,14 +6,15 @@ namespace App\Http\Controllers\App;
 
 use App\Actions\Billing\StartSubscriptionCheckout;
 use App\Enums\Billing\Interval;
+use App\Enums\Plan\Slug;
 use App\Enums\PostHog\CheckoutEvent;
 use App\Enums\PostHog\WelcomeEvent;
 use App\Enums\User\Goal;
 use App\Enums\User\Persona;
+use App\Enums\User\PreviousSoftware;
 use App\Http\Requests\App\Welcome\StoreWelcomeGoalsRequest;
 use App\Http\Requests\App\Welcome\StoreWelcomePersonaRequest;
-use App\Http\Requests\App\Welcome\StoreWelcomePlanRequest;
-use App\Http\Resources\App\PlanResource;
+use App\Http\Requests\App\Welcome\StoreWelcomeSoftwareRequest;
 use App\Models\Plan;
 use App\Services\PostHogService;
 use Illuminate\Http\RedirectResponse;
@@ -98,24 +99,28 @@ class WelcomeController extends Controller
             $user->account,
         );
 
-        return redirect()->route('app.welcome.plan');
+        return redirect()->route('app.welcome.software');
     }
 
-    public function plan(Request $request): InertiaResponse|RedirectResponse
+    public function software(Request $request): InertiaResponse|RedirectResponse
     {
         if ($redirect = $this->redirectIfStepIncomplete($request, requireGoals: true)) {
             return $redirect;
         }
 
-        return Inertia::render('welcome/Plan', [
-            'plans' => PlanResource::collection(
-                Plan::active()->orderBy('sort')->get(),
-            )->resolve(),
+        $user = $request->user();
+
+        return Inertia::render('welcome/Software', [
+            'software' => array_map(fn (PreviousSoftware $software): array => [
+                'value' => $software->value,
+                'name' => $software->brandName(),
+            ], PreviousSoftware::cases()),
+            'selected' => $user->previous_software?->value,
         ]);
     }
 
-    public function storePlan(
-        StoreWelcomePlanRequest $request,
+    public function storeSoftware(
+        StoreWelcomeSoftwareRequest $request,
         StartSubscriptionCheckout $checkout,
         PostHogService $postHog,
     ): Response|RedirectResponse {
@@ -124,12 +129,26 @@ class WelcomeController extends Controller
         }
 
         $user = $request->user();
-        $plan = Plan::active()->findOrFail($request->validated('plan_id'));
+        $previousSoftware = (string) $request->validated('previous_software');
+
+        $user->update(['previous_software' => $previousSoftware]);
+
+        $postHog->identify($user->id, [
+            'previous_software' => $previousSoftware,
+        ]);
+        $postHog->capture(
+            $user->id,
+            WelcomeEvent::Software->value,
+            ['previous_software' => $previousSoftware],
+            $user->account,
+        );
+
+        $plan = Plan::active()->where('slug', Slug::Socials)->firstOrFail();
         $priceId = Interval::Monthly->priceIdFor($plan);
 
         abort_if($priceId === null, Response::HTTP_INTERNAL_SERVER_ERROR, 'Price is not configured.');
 
-        $response = $checkout->redirect($user->account, $priceId, route('app.welcome.plan'), $plan);
+        $response = $checkout->redirect($user->account, $priceId, route('app.welcome.software'), $plan);
 
         try {
             $postHog->capture(

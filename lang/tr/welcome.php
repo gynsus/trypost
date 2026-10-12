@@ -15,7 +15,7 @@ return [
     'steps' => [
         'persona' => 'Senin hakkında',
         'goals' => 'Hedeflerin',
-        'plan' => 'Plan',
+        'software' => 'Mevcut araç',
     ],
     'personas' => [
         'creator' => 'İçerik üreticisi',
@@ -39,6 +39,9 @@ return [
         'manage_clients' => 'Marka veya müşteri yönetmek',
         'other' => 'Başka bir şey',
     ],
-    'plan_title' => 'Planını seç',
-    'plan_description' => 'İki planın özellikleri aynı. Fark, workspace sayısında; planı istediğiniz zaman değiştirebilirsiniz.',
+    'software_title' => 'Bugün hangi aracı kullanıyorsun?',
+    'software' => [
+        'none' => 'Henüz bir araç kullanmıyorum',
+        'other' => 'Diğer',
+    ],
 ];
