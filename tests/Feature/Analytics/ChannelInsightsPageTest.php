@@ -11,7 +11,6 @@ use App\Jobs\Analytics\CollectAccountDailySnapshot;
 use App\Models\AnalyticsPublication;
 use App\Models\AnalyticsPublicationDailySnapshot;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
@@ -70,15 +69,10 @@ test('the insights page renders the channel report and its publications', functi
     $publication = channelInsightsPublication($this->instagram, '2026-09-20 10:00:00', ['reactions_count' => 8, 'comments_count' => 2], [
         'preview_metadata' => ['thumbnail_url' => 'https://cdn.example.com/a.jpg'],
     ]);
-    $post = Post::factory()->published()->create(['workspace_id' => $this->workspace->id, 'user_id' => $this->user->id]);
-    $destination = PostPlatform::factory()->published()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $this->instagram->id,
-        'platform' => Platform::Instagram,
-    ]);
+    $post = Post::factory()->forAccount($this->instagram)->published()->create(['user_id' => $this->user->id]);
     $insecure = channelInsightsPublication($this->instagram, '2026-09-19 10:00:00', ['reactions_count' => 3], [
         'preview_metadata' => ['thumbnail_url' => 'http://cdn.example.com/b.jpg'],
-        'post_platform_id' => $destination->id,
+        'post_id' => $post->id,
     ]);
 
     $this->actingAs($this->user)
@@ -113,6 +107,27 @@ test('the insights page renders the channel report and its publications', functi
             ->where('sync', SyncCadence::toArray())
             ->where('publications.data.1.rank', 2)
             ->where('publications.data.1.thumbnail_url', null)
+            ->etc());
+});
+
+test('publications show the post media from our bucket instead of the network preview', function () {
+    $image = ['id' => 'image', 'path' => 'medias/a.jpg', 'url' => 'https://cdn.trypost.test/medias/a.jpg', 'type' => 'image', 'mime_type' => 'image/jpeg'];
+    $video = ['id' => 'video', 'path' => 'medias/reel.mp4', 'url' => 'https://cdn.trypost.test/medias/reel.mp4', 'type' => 'video', 'mime_type' => 'video/mp4', 'meta' => ['cover_offset_ms' => 1500]];
+    $imagePost = Post::factory()->forAccount($this->instagram)->published()->create(['media' => [$image]]);
+    $videoPost = Post::factory()->forAccount($this->instagram)->published()->create(['media' => [$video]]);
+    $expired = ['preview_metadata' => ['thumbnail_url' => 'https://scontent.cdninstagram.com/expired.jpg?oe=6ACC450F']];
+    channelInsightsPublication($this->instagram, '2026-09-20 10:00:00', ['reactions_count' => 8], [...$expired, 'post_id' => $imagePost->id]);
+    channelInsightsPublication($this->instagram, '2026-09-19 10:00:00', ['reactions_count' => 3], [...$expired, 'post_id' => $videoPost->id]);
+
+    $this->actingAs($this->user)
+        ->get(route('app.channels.insights', $this->instagram))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('publications.data.0.thumbnail_url', $image['url'])
+            ->where('publications.data.0.media.url', $image['url'])
+            ->where('publications.data.1.media.url', $video['url'])
+            ->where('publications.data.1.media.type', 'video')
+            ->where('publications.data.1.media.meta.cover_offset_ms', 1500)
             ->etc());
 });
 

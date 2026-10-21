@@ -1,20 +1,21 @@
 <script setup lang="ts">
-import { Link, router, usePage } from '@inertiajs/vue3';
+import { router, usePage } from '@inertiajs/vue3';
 import {
     IconArrowsMaximize,
     IconCircleDashedPlus,
+    IconCirclePlay,
     IconEdit,
     IconExternalLink,
+    IconMessageCircle,
+    IconMessageCircleFilled,
     IconGripVertical,
-    IconListNumbers,
-    IconCheck,
     IconClockPause,
+    IconHourglass,
     IconLoader2,
     IconPencil,
     IconPlayerPlayFilled,
     IconRepeat,
     IconSend,
-    IconVideo,
     IconX,
 } from '@tabler/icons-vue';
 import { type Component, computed, inject, ref, watch } from 'vue';
@@ -24,8 +25,9 @@ import { edit as editPostRoute } from '@/actions/App/Http/Controllers/App/PostCo
 import ChannelAvatar from '@/components/ChannelAvatar.vue';
 import MediaLightbox from '@/components/media/MediaLightbox.vue';
 import PlatformBrandIcon from '@/components/PlatformBrandIcon.vue';
-import PostNotesPopover from '@/components/posts/PostNotesPopover.vue';
+import PostNotesPanel from '@/components/posts/editor/PostNotesPanel.vue';
 import PostScheduleModeBadge from '@/components/posts/PostScheduleModeBadge.vue';
+import AddToQueueButton from '@/components/publish/AddToQueueButton.vue';
 import ApprovePostButton from '@/components/publish/ApprovePostButton.vue';
 import PostCardLabels from '@/components/publish/PostCardLabels.vue';
 import PostCardMenu from '@/components/publish/PostCardMenu.vue';
@@ -37,12 +39,16 @@ import PostRecurrenceSummary from '@/components/publish/PostRecurrenceSummary.vu
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
+    Collapsible,
+    CollapsibleContent,
+    CollapsibleTrigger,
+} from '@/components/ui/collapsible';
+import {
     Tooltip,
     TooltipContent,
     TooltipProvider,
     TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { useAtLeastBreakpoint } from '@/composables/useBreakpoint';
 import { useDisplayTimezone } from '@/composables/useDisplayTimezone';
 import {
     getContentTypeBadgeKey,
@@ -50,9 +56,11 @@ import {
 } from '@/composables/usePlatformLogo';
 import {
     deletePostCardKey,
+    copyPostCardLink,
     duplicatePostCard,
     editPostCardUrlKey,
     schedulePostCard,
+    sharePostCardLink,
     toastFirstError,
 } from '@/composables/usePostCardActions';
 import { getPostStatusConfig } from '@/composables/usePostStatus';
@@ -66,7 +74,7 @@ import { videoFrameUrl } from '@/lib/videoFrame';
 import { Platform } from '@/types/platform';
 import {
     PostOrigin,
-    PostPlatformStatus,
+    PublishStatus,
     PostStatus,
     ScheduleMode,
 } from '@/types/post';
@@ -107,7 +115,7 @@ const emit = defineEmits<{
 const MAX_THUMBNAILS = 4;
 
 const page = usePage();
-const { canApprove, canCreatePost, canPublishDirectly, requiresApproval } =
+const { canApprove, canCreatePost, canPublishDirectly } =
     useWorkspaceAbilities();
 const deletePost = inject(deletePostCardKey, () => {});
 const editUrl = inject(editPostCardUrlKey, (post: PostCard) =>
@@ -122,27 +130,30 @@ watch(
     },
 );
 
-const testKey = computed(() => props.post.card_key ?? props.post.id);
-
 const authUserId = computed(() => String(page.props.authUserId ?? ''));
 const openPostNotesId = computed(
     () => (page.props.openPostNotesId as string | null | undefined) ?? null,
 );
-const highlightNoteId = computed(
-    () => (page.props.highlightNoteId as string | null | undefined) ?? null,
+const highlightNoteId = computed(() =>
+    openPostNotesId.value === props.post.id
+        ? ((page.props.highlightNoteId as string | null | undefined) ?? null)
+        : null,
 );
 
-const targets = computed(() =>
-    props.post.post_platforms.filter((target) => target.enabled),
-);
-const primaryTarget = computed(() => targets.value[0] ?? null);
-const account = computed(() => primaryTarget.value?.social_account ?? null);
+const platform = computed(() => props.post.platform ?? null);
+const account = computed(() => props.post.social_account ?? null);
 const recurrenceTimezone = computed(
     () => account.value?.timezone ?? timezone.value,
 );
 
 const isPublishing = computed(
     () => props.post.status === PostStatus.Publishing,
+);
+
+const isInGoogleReview = computed(
+    () =>
+        isPublishing.value &&
+        props.post.publish_status === PublishStatus.PendingReview,
 );
 
 const scheduleMode = computed(() => {
@@ -158,7 +169,23 @@ const scheduleMode = computed(() => {
 });
 
 const showNotes = computed(() => !props.popover && !isPublishing.value);
-const notesBesideCard = useAtLeastBreakpoint('lg');
+const notesOpen = ref(openPostNotesId.value === props.post.id);
+const noteCount = ref(props.post.notes_count);
+
+watch(
+    () => props.post.notes_count,
+    (count) => {
+        noteCount.value = count;
+    },
+);
+
+watch(openPostNotesId, (id) => {
+    if (id === props.post.id) notesOpen.value = true;
+});
+
+const setNoteCount = (count: number): void => {
+    noteCount.value = count;
+};
 
 const time = computed(() => {
     if (props.tab === 'sent') {
@@ -174,24 +201,11 @@ const time = computed(() => {
         : props.post.scheduled_at;
 });
 
-const limitRetryAt = computed(
-    () =>
-        targets.value.find(
-            (target) =>
-                target.status === PostPlatformStatus.Retrying &&
-                Boolean(target.retry_at),
-        )?.retry_at ?? null,
+const limitRetryAt = computed(() =>
+    props.post.publish_status === PublishStatus.Retrying
+        ? (props.post.retry_at ?? null)
+        : null,
 );
-
-const PUBLISHED_TARGET_STATUSES = ['published', 'pending_review'];
-const FAILED_TARGET_STATUSES = ['failed', 'rejected'];
-
-const targetProgress = (status: string): 'done' | 'failed' | 'running' =>
-    PUBLISHED_TARGET_STATUSES.includes(status)
-        ? 'done'
-        : FAILED_TARGET_STATUSES.includes(status)
-          ? 'failed'
-          : 'running';
 
 const isPending = computed(
     () => props.post.status === PostStatus.PendingApproval,
@@ -239,33 +253,24 @@ const openLightbox = (index: number): void => {
 const CONTENT_TYPE_ICONS: Record<string, Component> = {
     instagram_story: IconCircleDashedPlus,
     facebook_story: IconCircleDashedPlus,
-    instagram_reel: IconVideo,
-    facebook_reel: IconVideo,
+    instagram_reel: IconCirclePlay,
+    facebook_reel: IconCirclePlay,
 };
 
 const contentTypeIcon = computed(() =>
-    CONTENT_TYPE_ICONS[primaryTarget.value?.content_type ?? ''] ?? null,
+    CONTENT_TYPE_ICONS[props.post.content_type ?? ''] ?? null,
 );
 
 const contentTypeKey = computed(() =>
-    primaryTarget.value
-        ? getContentTypeBadgeKey(
-              primaryTarget.value.platform,
-              primaryTarget.value.content_type ?? null,
-          )
+    platform.value
+        ? getContentTypeBadgeKey(platform.value, props.post.content_type ?? null)
         : null,
 );
 
-const canQueue = computed(
-    () => account.value?.has_posting_schedule === true,
-);
-
-const permalink = computed(() => primaryTarget.value?.platform_url ?? null);
+const permalink = computed(() => props.post.platform_url ?? null);
 
 const metricsDetail = computed(() => {
-    const detail = primaryTarget.value
-        ? props.post.metrics?.[primaryTarget.value.id]
-        : null;
+    const detail = props.post.metrics ?? null;
 
     return detail && detail.available ? detail : null;
 });
@@ -284,16 +289,7 @@ const showStatus = computed(
         !isPending.value,
 );
 
-const hasFailure = computed(
-    () =>
-        props.post.status === PostStatus.Failed ||
-        (props.post.status === PostStatus.PartiallyPublished &&
-            targets.value.some(
-                (target) =>
-                    target.status === PostPlatformStatus.Failed ||
-                    target.status === PostPlatformStatus.Rejected,
-            )),
-);
+const hasFailure = computed(() => props.post.status === PostStatus.Failed);
 
 const APPROVAL_RELOAD = {
     only: ['posts', 'counts', 'queue', 'hasData'],
@@ -310,12 +306,6 @@ const rejectPost = (): void => {
 
 const revertRequest = (): void => {
     schedulePostCard(props.post.id, 'draft', APPROVAL_RELOAD);
-};
-
-const addToQueue = (): void => {
-    schedulePostCard(props.post.id, 'queue_next', {
-        requestsApproval: requiresApproval.value,
-    });
 };
 
 const recurrence = computed(() =>
@@ -339,6 +329,16 @@ const edit = (post: PostCard = props.post): void => {
     router.visit(editUrl(post));
 };
 
+const open = (): void => {
+    if (isEditable.value) {
+        edit();
+
+        return;
+    }
+
+    openDetails();
+};
+
 const runPostAction = (action: PostCardMenuAction, post: PostCard): void => {
     switch (action) {
         case 'publish_now':
@@ -356,6 +356,12 @@ const runPostAction = (action: PostCardMenuAction, post: PostCard): void => {
             break;
         case 'details':
             detailsOpen.value = true;
+            break;
+        case 'share_link':
+            sharePostCardLink(post);
+            break;
+        case 'copy_link':
+            copyPostCardLink(post);
             break;
         case 'delete':
             deletePost(post);
@@ -384,7 +390,7 @@ defineExpose({ openDetails });
 
 <template>
     <div
-        :data-testid="`post-card-${testKey}`"
+        :data-testid="`post-card-${post.id}`"
         :data-post-id="post.id"
         class="group/post relative"
         :class="
@@ -410,7 +416,7 @@ defineExpose({ openDetails });
                             ? 'shrink-0 transition-opacity active:cursor-grabbing md:absolute md:top-0.5 md:left-[79px] md:opacity-0 md:group-focus-within/post:opacity-100 md:group-hover/post:opacity-100 md:in-data-dragging:opacity-100'
                             : 'md:-ms-5'
                     "
-                    :data-testid="`post-drag-handle-${testKey}`"
+                    :data-testid="`post-drag-handle-${post.id}`"
                     aria-hidden="true"
                 />
                 <time
@@ -418,7 +424,7 @@ defineExpose({ openDetails });
                     class="text-sm text-foreground"
                     :class="popover ? 'font-emphasis' : 'font-medium'"
                     :datetime="time"
-                    :data-testid="`post-time-${testKey}`"
+                    :data-testid="`post-time-${post.id}`"
                 >
                     {{
                         popover
@@ -434,7 +440,7 @@ defineExpose({ openDetails });
                 v-if="isPending"
                 variant="warning"
                 class="h-6 gap-1 px-2 [&>svg]:size-4"
-                :data-testid="`post-approval-badge-${testKey}`"
+                :data-testid="`post-approval-badge-${post.id}`"
             >
                 <IconEdit />
                 {{ $t('posts.approvals.badge') }}
@@ -442,14 +448,14 @@ defineExpose({ openDetails });
             <span
                 v-if="timePassed"
                 class="text-xs text-destructive-text"
-                :data-testid="`post-time-passed-${testKey}`"
+                :data-testid="`post-time-passed-${post.id}`"
             >
                 {{ $t('posts.approvals.time_passed') }}
             </span>
             <span
                 v-if="recurrence"
                 class="inline-flex items-center gap-0.5 text-xs text-muted-foreground"
-                :data-testid="`post-recurring-${testKey}`"
+                :data-testid="`post-recurring-${post.id}`"
             >
                 <IconRepeat class="size-3" />
                 {{ $t('posts.recurrence.marker') }}
@@ -463,7 +469,7 @@ defineExpose({ openDetails });
             <PostFailurePopover
                 v-if="showStatus && hasFailure"
                 :post="post"
-                :test-key="testKey"
+                :test-key="post.id"
                 :attempted-at="time"
                 :timezone="timezone"
             />
@@ -471,7 +477,7 @@ defineExpose({ openDetails });
                 v-else-if="showStatus && !isPublishing"
                 :variant="getPostStatusConfig(post.status).variant"
                 class="h-6 gap-1 px-2 [&>svg]:size-4"
-                :data-testid="`post-status-${testKey}`"
+                :data-testid="`post-status-${post.id}`"
             >
                 <component
                     :is="getPostStatusConfig(post.status).icon"
@@ -485,475 +491,456 @@ defineExpose({ openDetails });
                 size="icon"
                 class="-my-1 ms-auto -me-2"
                 :aria-label="$t('posts.show.title')"
-                :data-testid="`post-details-expand-${testKey}`"
+                :data-testid="`post-details-expand-${post.id}`"
                 @click="openDetails"
             >
                 <IconArrowsMaximize class="size-4" />
             </Button>
         </div>
 
-        <article
-            class="min-w-0 overflow-hidden"
-            :class="{
-                'rounded-xl border bg-card': !popover,
-                'border-border-strong': !popover,
-            }"
-        >
-            <p
-                v-if="recurrence && post.scheduled_at"
-                class="flex items-start gap-2 border-b border-border-strong bg-secondary px-4 py-2.5 text-sm text-foreground"
-                :data-testid="`post-recurrence-banner-${testKey}`"
-            >
-                <IconRepeat class="mt-0.5 size-4 shrink-0" />
-                <PostRecurrenceSummary
-                    :scheduled-at="post.scheduled_at"
-                    :timezone="recurrenceTimezone"
-                    :rule="recurrence"
-                    :remaining="recurrence.times"
-                    :origin-at="post.recurrence_origin_at"
-                />
-            </p>
-            <div
-                v-if="isPublishing && !popover"
-                class="relative flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-strong bg-secondary px-4 py-2.5 text-sm text-foreground"
-                role="status"
-                :data-testid="`post-publishing-${testKey}`"
-            >
-                <span
-                    class="absolute inset-x-0 -bottom-px h-0.5 overflow-hidden"
-                    aria-hidden="true"
-                    :data-testid="`post-publishing-progress-${testKey}`"
-                >
-                    <span
-                        class="motion-progress-sweep block h-full w-2/5 rounded-full bg-primary-strong"
-                    />
-                </span>
-                <span
-                    v-if="limitRetryAt"
-                    class="inline-flex items-center gap-2"
-                    :data-testid="`post-limit-retry-${testKey}`"
-                >
-                    <IconClockPause
-                        class="size-4 text-primary-strong"
-                        aria-hidden="true"
-                    />
-                    {{
-                        $t('posts.publish.retrying_at', {
-                            time: formatTime(limitRetryAt),
-                        })
-                    }}
-                </span>
-                <span v-else class="inline-flex items-center gap-2">
-                    <IconLoader2
-                        class="size-4 animate-spin text-primary-strong"
-                        aria-hidden="true"
-                    />
-                    {{
-                        targets.length === 1 && primaryTarget
-                            ? $t('posts.publish.publishing_on', {
-                                  network: getPlatformLabel(primaryTarget.platform),
-                              })
-                            : $t('posts.publish.publishing_badge')
-                    }}
-                </span>
-                <ul
-                    v-if="targets.length > 1"
-                    class="flex flex-wrap items-center gap-1.5"
-                >
-                    <li
-                        v-for="target in targets"
-                        :key="target.id"
-                        class="inline-flex h-6 items-center gap-1 rounded-full bg-card px-1.5 text-xs"
-                        :title="getPlatformLabel(target.platform)"
-                        :data-testid="`post-publishing-target-${target.id}`"
-                        :data-progress="targetProgress(target.status)"
-                    >
-                        <PlatformBrandIcon :platform="target.platform" />
-                        <IconLoader2
-                            v-if="targetProgress(target.status) === 'running'"
-                            class="size-3.5 animate-spin text-muted-foreground"
-                        />
-                        <IconCheck
-                            v-else-if="targetProgress(target.status) === 'done'"
-                            class="size-3.5 text-success"
-                        />
-                        <IconX v-else class="size-3.5 text-destructive-text" />
-                    </li>
-                </ul>
-            </div>
-            <div
-                class="relative flex gap-4 p-4 md:gap-6"
-                :class="{ 'opacity-70': isPublishing && !popover }"
-            >
-                <component
-                    :is="isEditable ? Link : 'div'"
-                    :href="isEditable ? editUrl(post) : undefined"
-                    :draggable="draggable ? 'false' : undefined"
-                    class="flex min-w-0 flex-1 flex-col gap-4 outline-none after:absolute after:inset-0 focus-visible:after:outline-2 focus-visible:after:outline-offset-[-2px] focus-visible:after:outline-ring"
-                    :data-testid="`post-open-${testKey}`"
-                >
-                    <div class="flex items-center gap-3">
-                        <ChannelAvatar
-                            :status="account?.status"
-                            :account-id="account?.id"
-                            v-if="primaryTarget"
-                            :platform="primaryTarget.platform"
-                            :src="account?.avatar_url"
-                            :verified="account?.verified_badge"
-                            :name="
-                                account?.display_label ??
-                                getPlatformLabel(primaryTarget.platform)
-                            "
-                            ring="card"
-                            @dragstart="draggable ? $event.preventDefault() : undefined"
-                        />
-                        <div class="min-w-0">
-                            <p
-                                class="truncate text-sm leading-tight font-emphasis text-foreground"
-                            >
-                                {{
-                                    account?.display_label ??
-                                    getPlatformLabel(primaryTarget?.platform ?? '')
-                                }}
-                            </p>
-                            <p
-                                v-if="popover && account?.handle_label"
-                                class="truncate text-xs text-muted-foreground"
-                            >
-                                {{ account.handle_label }}
-                            </p>
-                        </div>
-                        <span
-                            v-if="targets.length > 1"
-                            class="text-xs font-medium text-muted-foreground"
-                            >+{{ targets.length - 1 }}</span
-                        >
-                        <Badge
-                            v-if="contentTypeKey"
-                            variant="secondary"
-                            class="ms-auto h-6 gap-1 px-2"
-                            :data-testid="`post-content-type-${testKey}`"
-                        >
-                            <component
-                                :is="contentTypeIcon"
-                                v-if="contentTypeIcon"
-                                class="size-3.5"
-                                aria-hidden="true"
-                            />
-                            {{ $t(contentTypeKey) }}
-                        </Badge>
-                    </div>
-                    <p
-                        class="line-clamp-4 text-sm whitespace-pre-line text-foreground"
-                        :class="{
-                            'text-muted-foreground': !preview,
-                            'leading-relaxed': popover,
-                        }"
-                    >
-                        {{ preview || $t('calendar.no_content') }}
-                    </p>
-                </component>
-                <div
-                    v-if="thumbnails.length"
-                    class="relative z-10 grid w-24 shrink-0 content-start gap-2"
-                    :class="[
-                        thumbnails.length > 1 ? 'grid-cols-2' : '',
-                        popover ? 'w-36' : 'md:w-[180px]',
-                    ]"
-                >
-                    <button
-                        v-for="(thumbnail, index) in thumbnails"
-                        :key="thumbnail.url"
-                        type="button"
-                        :aria-label="$t('common.media_lightbox.open')"
-                        :draggable="draggable ? 'false' : undefined"
-                        class="group/thumbnail relative block aspect-square cursor-zoom-in overflow-hidden rounded-md border border-border-strong bg-secondary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                        :data-testid="`post-thumbnail-${testKey}-${index}`"
-                        @click="openLightbox(index)"
-                    >
-                        <img
-                            v-if="isImage(thumbnail)"
-                            :draggable="draggable ? 'false' : undefined"
-                            :src="thumbnail.url"
-                            alt=""
-                            class="size-full object-cover"
-                            loading="lazy"
-                        />
-                        <template v-else>
-                            <video
-                                :src="videoFrameUrl(thumbnail)"
-                                class="size-full object-cover"
-                                muted
-                                playsinline
-                                preload="metadata"
-                                :data-testid="`post-thumbnail-video-${testKey}-${index}`"
-                            />
-                            <IconPlayerPlayFilled
-                                aria-hidden="true"
-                                class="absolute top-1/2 left-1/2 size-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white transition-opacity group-hover/thumbnail:opacity-0"
-                            />
-                        </template>
-                        <span
-                            aria-hidden="true"
-                            class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover/thumbnail:bg-black/30"
-                        >
-                            <IconArrowsMaximize
-                                class="size-6 text-white opacity-0 drop-shadow transition-opacity group-hover/thumbnail:opacity-100"
-                                :data-testid="`post-thumbnail-expand-${testKey}-${index}`"
-                            />
-                        </span>
-                    </button>
-                    <button
-                        v-if="hiddenVisuals > 0"
-                        type="button"
-                        :aria-label="$t('common.media_lightbox.open')"
-                        class="absolute right-1.5 bottom-1.5 inline-flex size-6 cursor-zoom-in items-center justify-center rounded-full bg-foreground/60 text-xs font-medium text-background transition-colors hover:bg-foreground/80 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                        :data-testid="`post-thumbnail-more-${testKey}`"
-                        @click="openLightbox(MAX_THUMBNAILS)"
-                    >
-                        +{{ hiddenVisuals }}
-                    </button>
-                </div>
-                <div
-                    v-if="showNotes && !notesBesideCard"
-                    class="relative z-10 shrink-0"
-                >
-                    <PostNotesPopover
-                        :post-id="post.id"
-                        :count="post.notes_count"
-                        :current-user-id="authUserId"
-                        :initial-open="openPostNotesId === post.id"
-                        :highlight-note-id="highlightNoteId"
-                    />
-                </div>
-                <MediaLightbox
-                    v-model:open="lightboxOpen"
-                    :items="visuals"
-                    :start-index="lightboxIndex"
-                />
-            </div>
-
-            <PostCardLabels
-                v-if="!isPublishing"
-                class="-mt-1 px-4 pb-4"
-                :post-id="post.id"
-                :labels="post.labels ?? []"
-                :test-key="testKey"
-            />
-
-            <PostMetricsBand
-                v-if="tab === 'sent' && metricsDetail && hasMetrics"
-                :detail="metricsDetail"
-                :channel-id="account?.id ?? null"
-                :metrics-test-id="`post-metrics-${testKey}`"
-                :insights-test-id="`post-insights-${testKey}`"
-            />
-
-            <div
-                class="m-2 flex min-h-14 flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-muted p-3 [&_[data-variant=ghost]:hover]:bg-secondary"
-                :class="popover ? 'justify-end' : 'justify-between'"
-                :data-testid="`post-footer-${testKey}`"
+        <Collapsible v-model:open="notesOpen" as-child>
+            <article
+                class="min-w-0 overflow-hidden"
+                :class="{
+                    'rounded-xl border bg-card': !popover,
+                    'border-border-strong': !popover,
+                }"
             >
                 <p
-                    v-if="!popover"
-                    class="min-w-0 truncate text-sm text-foreground"
-                    :class="{ 'max-sm:hidden': post.origin === PostOrigin.Network }"
+                    v-if="recurrence && post.scheduled_at"
+                    class="flex items-start gap-2 border-b border-border-strong bg-secondary px-4 py-2.5 text-sm text-foreground"
+                    :data-testid="`post-recurrence-banner-${post.id}`"
                 >
-                    <TooltipProvider
-                        v-if="post.origin === PostOrigin.Network && primaryTarget"
-                        :delay-duration="200"
-                    >
-                        <Tooltip>
-                            <TooltipTrigger as-child>
-                                <span
-                                    class="inline-flex cursor-default items-center gap-1"
-                                    :data-testid="`post-published-via-${testKey}`"
-                                >
-                                    {{ $t('posts.publish.published_via') }}
-                                    <PlatformBrandIcon
-                                        :platform="primaryTarget.platform"
-                                        :data-testid="`post-published-via-icon-${testKey}`"
-                                    />
-                                    <template v-if="primaryTarget.platform !== Platform.X">
-                                        {{ getPlatformLabel(primaryTarget.platform) }}
-                                    </template>
-                                </span>
-                            </TooltipTrigger>
-                            <TooltipContent :data-testid="`post-published-via-tooltip-${testKey}`">
-                                {{
-                                    $t('posts.publish.published_directly_from', {
-                                        network: getPlatformLabel(primaryTarget.platform),
-                                    })
-                                }}
-                            </TooltipContent>
-                        </Tooltip>
-                    </TooltipProvider>
-                    <span
-                        v-else-if="post.user?.name"
-                        :data-testid="`post-created-by-${testKey}`"
-                        >{{
-                        $t('posts.publish.created_by', {
-                            name: post.user.name,
-                            when: date.diffForHumans(post.created_at),
-                        })
-                    }}</span>
+                    <IconRepeat class="mt-0.5 size-4 shrink-0" />
+                    <PostRecurrenceSummary
+                        :scheduled-at="post.scheduled_at"
+                        :timezone="recurrenceTimezone"
+                        :rule="recurrence"
+                        :remaining="recurrence.times"
+                        :origin-at="post.recurrence_origin_at"
+                    />
                 </p>
                 <div
-                    class="flex max-w-full shrink-0 flex-wrap items-center gap-1 max-sm:ms-auto"
-                    :data-testid="`post-actions-${testKey}`"
+                    v-if="isPublishing && !popover"
+                    class="relative flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-strong bg-secondary px-4 py-2.5 text-sm text-foreground"
+                    role="status"
+                    :data-testid="`post-publishing-${post.id}`"
                 >
-                    <template v-if="isPending && canApprove">
-                        <ApprovePostButton :post="post" :test-key="testKey" />
-                        <Button
-                            variant="outline"
-                            class="text-destructive-text"
-                            :data-testid="`post-reject-${testKey}`"
-                            @click="rejectPost"
-                        >
-                            <IconX class="size-4" />
-                            {{ $t('posts.approvals.reject') }}
-                        </Button>
-                    </template>
-                    <Button
-                        v-else-if="isPending"
-                        variant="outline"
-                        :data-testid="`post-revert-${testKey}`"
-                        @click="revertRequest"
+                    <span
+                        v-if="!isInGoogleReview"
+                        class="absolute inset-x-0 -bottom-px h-0.5 overflow-hidden"
+                        aria-hidden="true"
+                        :data-testid="`post-publishing-progress-${post.id}`"
                     >
-                        <IconX class="size-4" />
-                        {{ $t('posts.approvals.revert') }}
-                    </Button>
-                    <template v-if="canCreatePost && tab === 'drafts'">
-                        <Button
-                            v-if="canQueue"
-                            variant="outline"
-                            :data-testid="`post-add-to-queue-${testKey}`"
-                            @click="addToQueue"
+                        <span
+                            class="motion-progress-sweep block h-full w-2/5 rounded-full bg-primary-strong"
+                        />
+                    </span>
+                    <span
+                        v-if="limitRetryAt"
+                        class="inline-flex items-center gap-2"
+                        :data-testid="`post-limit-retry-${post.id}`"
+                    >
+                        <IconClockPause
+                            class="size-4 text-primary-strong"
+                            aria-hidden="true"
+                        />
+                        {{
+                            $t('posts.publish.retrying_at', {
+                                time: formatTime(limitRetryAt),
+                            })
+                        }}
+                    </span>
+                    <span
+                        v-else-if="isInGoogleReview"
+                        class="inline-flex items-center gap-2"
+                        :data-testid="`post-google-review-${post.id}`"
+                    >
+                        <IconHourglass
+                            class="size-4 text-primary-strong"
+                            aria-hidden="true"
+                        />
+                        {{ $t('posts.publish.in_google_review') }}
+                    </span>
+                    <span v-else class="inline-flex items-center gap-2">
+                        <IconLoader2
+                            class="size-4 animate-spin text-primary-strong"
+                            aria-hidden="true"
+                        />
+                        {{
+                            platform
+                                ? $t('posts.publish.publishing_on', {
+                                      network: getPlatformLabel(platform),
+                                  })
+                                : $t('posts.publish.publishing_badge')
+                        }}
+                    </span>
+                </div>
+                <div
+                    class="relative flex gap-4 p-4 md:gap-6"
+                    :class="{ 'opacity-70': isPublishing && !popover }"
+                >
+                    <div
+                        :draggable="draggable ? 'false' : undefined"
+                        class="flex min-w-0 flex-1 cursor-pointer flex-col gap-4 outline-none after:absolute after:inset-0 focus-visible:after:outline-2 focus-visible:after:outline-offset-[-2px] focus-visible:after:outline-ring"
+                        :data-testid="`post-open-${post.id}`"
+                        @click="open"
+                    >
+                        <div class="flex items-center gap-3">
+                            <ChannelAvatar
+                                :status="account?.status"
+                                :account-id="account?.id"
+                                v-if="platform"
+                                :platform="platform"
+                                :src="account?.avatar_url"
+                                :verified="account?.verified_badge"
+                                :name="
+                                    account?.display_label ??
+                                    getPlatformLabel(platform)
+                                "
+                                ring="card"
+                                @dragstart="draggable ? $event.preventDefault() : undefined"
+                            />
+                            <div class="min-w-0">
+                                <p
+                                    class="truncate text-sm leading-tight font-emphasis text-foreground"
+                                >
+                                    {{
+                                        account?.display_label ??
+                                        getPlatformLabel(platform ?? '')
+                                    }}
+                                </p>
+                                <p
+                                    v-if="popover && account?.handle_label"
+                                    class="truncate text-xs text-muted-foreground"
+                                >
+                                    {{ account.handle_label }}
+                                </p>
+                            </div>
+                            <Badge
+                                v-if="contentTypeKey"
+                                variant="secondary"
+                                class="ms-auto h-6 gap-1.5 px-2 [&>svg]:size-4"
+                                :data-testid="`post-content-type-${post.id}`"
+                            >
+                                <component
+                                    :is="contentTypeIcon"
+                                    v-if="contentTypeIcon"
+                                    class="shrink-0"
+                                    aria-hidden="true"
+                                    :data-testid="`post-content-type-icon-${post.id}`"
+                                />
+                                {{ $t(contentTypeKey) }}
+                            </Badge>
+                        </div>
+                        <p
+                            class="line-clamp-4 text-sm whitespace-pre-line text-foreground"
+                            :class="{
+                                'text-muted-foreground': !preview,
+                                'leading-relaxed': popover,
+                            }"
                         >
-                            <IconListNumbers class="size-4" />
-                            {{ $t('posts.publish.actions.add_to_queue') }}
-                        </Button>
-                        <TooltipProvider v-else :delay-duration="200">
+                            {{ preview || $t('calendar.no_content') }}
+                        </p>
+                    </div>
+                    <div
+                        v-if="thumbnails.length"
+                        class="relative z-10 grid w-24 shrink-0 content-start gap-2"
+                        :class="[
+                            thumbnails.length > 1 ? 'grid-cols-2' : '',
+                            popover ? 'w-36' : 'md:w-[180px]',
+                        ]"
+                    >
+                        <button
+                            v-for="(thumbnail, index) in thumbnails"
+                            :key="thumbnail.url"
+                            type="button"
+                            :aria-label="$t('common.media_lightbox.open')"
+                            :draggable="draggable ? 'false' : undefined"
+                            class="group/thumbnail relative block aspect-square cursor-zoom-in overflow-hidden rounded-md border border-border-strong bg-secondary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                            :data-testid="`post-thumbnail-${post.id}-${index}`"
+                            @click="openLightbox(index)"
+                        >
+                            <img
+                                v-if="isImage(thumbnail)"
+                                :draggable="draggable ? 'false' : undefined"
+                                :src="thumbnail.url"
+                                alt=""
+                                class="size-full object-cover"
+                                loading="lazy"
+                            />
+                            <template v-else>
+                                <video
+                                    :src="videoFrameUrl(thumbnail)"
+                                    class="size-full object-cover"
+                                    muted
+                                    playsinline
+                                    preload="metadata"
+                                    :data-testid="`post-thumbnail-video-${post.id}-${index}`"
+                                />
+                                <IconPlayerPlayFilled
+                                    aria-hidden="true"
+                                    class="absolute top-1/2 left-1/2 size-8 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white transition-opacity group-hover/thumbnail:opacity-0"
+                                />
+                            </template>
+                            <span
+                                aria-hidden="true"
+                                class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover/thumbnail:bg-black/30"
+                            >
+                                <IconArrowsMaximize
+                                    class="size-6 text-white opacity-0 drop-shadow transition-opacity group-hover/thumbnail:opacity-100"
+                                    :data-testid="`post-thumbnail-expand-${post.id}-${index}`"
+                                />
+                            </span>
+                        </button>
+                        <button
+                            v-if="hiddenVisuals > 0"
+                            type="button"
+                            :aria-label="$t('common.media_lightbox.open')"
+                            class="absolute right-1.5 bottom-1.5 inline-flex size-6 cursor-zoom-in items-center justify-center rounded-full bg-foreground/60 text-xs font-medium text-background transition-colors hover:bg-foreground/80 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                            :data-testid="`post-thumbnail-more-${post.id}`"
+                            @click="openLightbox(MAX_THUMBNAILS)"
+                        >
+                            +{{ hiddenVisuals }}
+                        </button>
+                    </div>
+
+                    <MediaLightbox
+                        v-model:open="lightboxOpen"
+                        :items="visuals"
+                        :start-index="lightboxIndex"
+                    />
+                </div>
+
+                <PostCardLabels
+                    v-if="!isPublishing"
+                    class="-mt-1 px-4 pb-4"
+                    :post-id="post.id"
+                    :labels="post.labels ?? []"
+                    :test-key="post.id"
+                />
+
+                <PostMetricsBand
+                    v-if="tab === 'sent' && metricsDetail && hasMetrics"
+                    :detail="metricsDetail"
+                    :channel-id="account?.id ?? null"
+                    :metrics-test-id="`post-metrics-${post.id}`"
+                    :insights-test-id="`post-insights-${post.id}`"
+                />
+
+                <div
+                    class="m-2 flex min-h-14 flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-muted p-3 [&_[data-variant=ghost]:hover]:bg-secondary"
+                    :class="popover ? 'justify-end' : 'justify-between'"
+                    :data-testid="`post-footer-${post.id}`"
+                >
+                    <p
+                        v-if="!popover"
+                        class="min-w-0 truncate text-sm text-foreground"
+                        :class="{ 'max-sm:hidden': post.origin === PostOrigin.Network }"
+                    >
+                        <TooltipProvider
+                            v-if="post.origin === PostOrigin.Network && platform"
+                            :delay-duration="200"
+                        >
                             <Tooltip>
                                 <TooltipTrigger as-child>
-                                    <span tabindex="0">
-                                        <Button
-                                            variant="outline"
-                                            disabled
-                                            :data-testid="`post-add-to-queue-${testKey}`"
-                                        >
-                                            <IconListNumbers class="size-4" />
-                                            {{
-                                                $t(
-                                                    'posts.publish.actions.add_to_queue',
-                                                )
-                                            }}
-                                        </Button>
+                                    <span
+                                        class="inline-flex cursor-default items-center gap-1"
+                                        :data-testid="`post-published-via-${post.id}`"
+                                    >
+                                        {{ $t('posts.publish.published_via') }}
+                                        <PlatformBrandIcon
+                                            :platform="platform"
+                                            :data-testid="`post-published-via-icon-${post.id}`"
+                                        />
+                                        <template v-if="platform !== Platform.X">
+                                            {{ getPlatformLabel(platform) }}
+                                        </template>
                                     </span>
                                 </TooltipTrigger>
-                                <TooltipContent>
+                                <TooltipContent :data-testid="`post-published-via-tooltip-${post.id}`">
                                     {{
-                                        $t(
-                                            'posts.publish.actions.add_to_queue_disabled',
-                                        )
+                                        $t('posts.publish.published_directly_from', {
+                                            network: getPlatformLabel(platform),
+                                        })
                                     }}
                                 </TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
-                    </template>
-                    <Tooltip v-if="permalink && primaryTarget">
-                        <TooltipTrigger as-child>
-                            <Button
-                                as="a"
-                                :href="permalink"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                variant="outline"
-                                :data-testid="`post-view-${testKey}`"
-                            >
-                                <IconExternalLink class="size-4" />
-                                {{ $t('posts.publish.actions.view_post') }}
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent
-                            :data-testid="`post-view-tooltip-${testKey}`"
-                        >
-                            {{
-                                $t('posts.publish.actions.open_on_network', {
-                                    network: getPlatformLabel(
-                                        primaryTarget.platform,
-                                    ),
-                                })
-                            }}
-                        </TooltipContent>
-                    </Tooltip>
-                    <Button
-                        v-if="canPublishDirectly && post.status === PostStatus.Scheduled"
-                        variant="outline"
-                        :data-testid="`post-publish-now-${testKey}`"
-                        @click="schedulePostCard(post.id, 'publish_now')"
+                        <span
+                            v-else-if="post.user?.name"
+                            :data-testid="`post-created-by-${post.id}`"
+                            >{{
+                            $t('posts.publish.created_by', {
+                                name: post.user.name,
+                                when: date.diffForHumans(post.created_at),
+                            })
+                        }}</span>
+                    </p>
+                    <div
+                        class="flex max-w-full shrink-0 flex-wrap items-center gap-1 max-sm:ms-auto"
+                        :data-testid="`post-actions-${post.id}`"
                     >
-                        <IconSend class="size-4" />
-                        {{ $t('posts.publish.actions.publish_now') }}
-                    </Button>
-                    <Tooltip v-if="canCreatePost && isEditable">
-                        <TooltipTrigger as-child>
+                        <Tooltip v-if="showNotes">
+                            <TooltipTrigger as-child>
+                                <CollapsibleTrigger as-child>
+                                    <Button
+                                        variant="outline"
+                                        class="data-[state=open]:bg-accent"
+                                        :data-testid="`post-notes-trigger-${post.id}`"
+                                    >
+                                        <IconMessageCircleFilled
+                                            v-if="noteCount > 0"
+                                            class="size-4"
+                                            :data-testid="`post-notes-filled-icon-${post.id}`"
+                                        />
+                                        <IconMessageCircle
+                                            v-else
+                                            class="size-4 text-muted-foreground"
+                                            :data-testid="`post-notes-outline-icon-${post.id}`"
+                                        />
+                                        {{ $t('notes.title') }}
+                                        <span
+                                            v-if="noteCount > 0"
+                                            class="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-selected px-1 text-[10px] leading-none font-medium text-primary-text tabular-nums"
+                                            :data-testid="`post-notes-count-${post.id}`"
+                                            >{{ noteCount > 99 ? '99+' : noteCount }}</span
+                                        >
+                                    </Button>
+                                </CollapsibleTrigger>
+                            </TooltipTrigger>
+                            <TooltipContent
+                                :data-testid="`post-notes-tooltip-${post.id}`"
+                            >
+                                {{
+                                    notesOpen
+                                        ? $t('notes.hide')
+                                        : $t('notes.show')
+                                }}
+                            </TooltipContent>
+                        </Tooltip>
+                        <template v-if="isPending && canApprove">
+                            <ApprovePostButton :post="post" :test-key="post.id" />
                             <Button
                                 variant="outline"
-                                size="icon"
-                                :aria-label="$t('posts.publish.actions.edit')"
-                                :data-testid="`post-edit-${testKey}`"
-                                @click="edit()"
+                                class="text-destructive-text"
+                                :data-testid="`post-reject-${post.id}`"
+                                @click="rejectPost"
                             >
-                                <IconPencil class="size-4" />
+                                <IconX class="size-4" />
+                                {{ $t('posts.approvals.reject') }}
                             </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            {{ $t('posts.publish.actions.edit') }}
-                        </TooltipContent>
-                    </Tooltip>
-                    <PostCardMenu
-                        v-if="canCreatePost && !isPublishing"
-                        :post="post"
-                        :test-key="testKey"
-                        :can-move-up="canMoveUp"
-                        :can-move-down="canMoveDown"
-                        :movable="movable"
-                        @select="onMenuSelect"
-                    />
-                    <PostDetailsDialog
-                        v-if="canCreatePost"
-                        v-model:open="detailsOpen"
-                        :post="post"
-                        :test-key="testKey"
-                        :timezone="timezone"
-                        @select="runPostAction"
-                        @edit="edit"
-                    />
-                    <PostRecurrenceDialog
-                        v-if="canCreatePost"
-                        v-model:open="recurrenceOpen"
-                        :post="
-                            recurrencePost.id === post.id ? post : recurrencePost
-                        "
-                        :test-key="testKey"
-                        :timezone="recurrenceTimezone"
-                    />
+                        </template>
+                        <Button
+                            v-else-if="isPending"
+                            variant="outline"
+                            :data-testid="`post-revert-${post.id}`"
+                            @click="revertRequest"
+                        >
+                            <IconX class="size-4" />
+                            {{ $t('posts.approvals.revert') }}
+                        </Button>
+                        <AddToQueueButton
+                            v-if="canCreatePost && tab === 'drafts' && account"
+                            :post="post"
+                            :account="account"
+                        />
+                        <Tooltip v-if="permalink && platform">
+                            <TooltipTrigger as-child>
+                                <Button
+                                    as="a"
+                                    :href="permalink"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    variant="outline"
+                                    :data-testid="`post-view-${post.id}`"
+                                >
+                                    <IconExternalLink class="size-4" />
+                                    {{ $t('posts.publish.actions.view_post') }}
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent
+                                :data-testid="`post-view-tooltip-${post.id}`"
+                            >
+                                {{
+                                    $t('posts.publish.actions.open_on_network', {
+                                        network: getPlatformLabel(
+                                            platform,
+                                        ),
+                                    })
+                                }}
+                            </TooltipContent>
+                        </Tooltip>
+                        <Button
+                            v-if="canPublishDirectly && post.status === PostStatus.Scheduled"
+                            variant="outline"
+                            :data-testid="`post-publish-now-${post.id}`"
+                            @click="schedulePostCard(post.id, 'publish_now')"
+                        >
+                            <IconSend class="size-4" />
+                            {{ $t('posts.publish.actions.publish_now') }}
+                        </Button>
+                        <Tooltip v-if="canCreatePost && isEditable">
+                            <TooltipTrigger as-child>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    :aria-label="$t('posts.publish.actions.edit')"
+                                    :data-testid="`post-edit-${post.id}`"
+                                    @click="edit()"
+                                >
+                                    <IconPencil class="size-4" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                                {{ $t('posts.publish.actions.edit') }}
+                            </TooltipContent>
+                        </Tooltip>
+                        <PostCardMenu
+                            v-if="canCreatePost && !isPublishing"
+                            :post="post"
+                            :test-key="post.id"
+                            :can-move-up="canMoveUp"
+                            :can-move-down="canMoveDown"
+                            :movable="movable"
+                            @select="onMenuSelect"
+                        />
+                        <PostDetailsDialog
+                            v-if="canCreatePost"
+                            v-model:open="detailsOpen"
+                            :post="post"
+                            :test-key="post.id"
+                            :timezone="timezone"
+                            @select="runPostAction"
+                            @edit="edit"
+                        />
+                        <PostRecurrenceDialog
+                            v-if="canCreatePost"
+                            v-model:open="recurrenceOpen"
+                            :post="
+                                recurrencePost.id === post.id ? post : recurrencePost
+                            "
+                            :test-key="post.id"
+                            :timezone="recurrenceTimezone"
+                        />
+                    </div>
                 </div>
-            </div>
-        </article>
+                <CollapsibleContent
+                    v-if="showNotes"
+                    class="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down motion-reduce:animate-none"
+                    :data-testid="`post-notes-section-${post.id}`"
+                >
+                    <PostNotesPanel
+                        class="px-4 pt-2 pb-4"
+                        :post-id="post.id"
+                        :current-user-id="authUserId"
+                        :highlight-note-id="highlightNoteId"
+                        :aria-label="$t('notes.title')"
+                        @count="setNoteCount"
+                    />
+                </CollapsibleContent>
+            </article>
+        </Collapsible>
 
-        <div
-            v-if="showNotes && notesBesideCard"
-            class="absolute top-0 left-full ms-1"
-        >
-            <PostNotesPopover
-                :post-id="post.id"
-                :count="post.notes_count"
-                :current-user-id="authUserId"
-                :initial-open="openPostNotesId === post.id"
-                :highlight-note-id="highlightNoteId"
-            />
-        </div>
     </div>
 </template>

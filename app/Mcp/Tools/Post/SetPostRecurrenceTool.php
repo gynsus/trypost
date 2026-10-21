@@ -10,7 +10,6 @@ use App\Enums\Post\Status as PostStatus;
 use App\Http\Resources\Api\PostResource;
 use App\Mcp\Concerns\AuthorizesMcpTool;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\Workspace;
 use App\Support\PostingSchedule;
 use App\Support\Timezone;
@@ -25,7 +24,13 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
+#[IsReadOnly(false)]
+#[IsDestructive(true)]
+#[IsOpenWorld(true)]
 #[Description('Make a scheduled post repeat: every `interval` days, weeks, months or years, `times` more times. The post must be scheduled with a time, and the last occurrence must fall on or before 2037-12-31 23:59:59 UTC. Each occurrence keeps the same local time in the channel time zone. Only members who publish directly can set a recurrence.')]
 class SetPostRecurrenceTool extends Tool
 {
@@ -74,11 +79,10 @@ class SetPostRecurrenceTool extends Tool
             $frequency = RecurrenceFrequency::from((string) $request->get('frequency'));
             $steps = (int) $request->get('interval') * (int) $request->get('times');
             $ceiling = CarbonImmutable::parse(PostingSchedule::MAX_INSTANT, 'UTC');
-            $tooFar = $post->postPlatforms()->enabled()->with('socialAccount')->get()
-                ->contains(fn (PostPlatform $target): bool => $frequency->advance(
-                    $post->scheduled_at->toImmutable()->setTimezone(Timezone::normalize($target->socialAccount?->timezone)),
-                    $steps,
-                )->greaterThan($ceiling));
+            $tooFar = $post->hasDestination() && $frequency->advance(
+                $post->scheduled_at->toImmutable()->setTimezone(Timezone::normalize($post->socialAccount?->timezone)),
+                $steps,
+            )->greaterThan($ceiling);
 
             if ($tooFar) {
                 $validator->errors()->add('times', __('posts.recurrence.errors.too_far'));
@@ -87,7 +91,7 @@ class SetPostRecurrenceTool extends Tool
 
         UpdatePostRecurrence::execute($post, $validated);
 
-        $post = Post::query()->with(['postPlatforms.socialAccount', 'labels'])->findOrFail($post->id);
+        $post = Post::query()->with(['socialAccount', 'labels'])->findOrFail($post->id);
 
         return Response::structured((new PostResource($post))->resolve());
     }

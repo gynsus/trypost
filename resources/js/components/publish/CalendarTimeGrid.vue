@@ -66,6 +66,24 @@ const expandHour = (key: string, hour: number): void => {
     expandedHours.value = [...expandedHours.value, `${key}-${hour}`];
 };
 
+const isStacked = (
+    column: { byHour: Map<number, CalendarItem[]> },
+    hour: number,
+): boolean => (column.byHour.get(hour)?.length ?? 0) > 1;
+
+const iconOnly = computed(() => compact.value && props.days.length === 7);
+
+const chipClass = (
+    column: { byHour: Map<number, CalendarItem[]> },
+    hour: number,
+): string => {
+    if (iconOnly.value) {
+        return '';
+    }
+
+    return isStacked(column, hour) ? 'w-full shrink-0' : 'flex-1';
+};
+
 const visibleItems = (
     key: string,
     hour: number,
@@ -167,10 +185,15 @@ watch(
                     </div>
 
                     <div
-                        class="flex min-w-0 flex-1 gap-1"
+                        class="flex min-w-0 flex-1"
                         :class="
-                            isExpanded(column.key, hour)
-                                ? 'max-h-full flex-col overflow-y-auto overscroll-contain'
+                            isStacked(column, hour)
+                                ? [
+                                      'flex-col gap-0.5',
+                                      isExpanded(column.key, hour)
+                                          ? 'max-h-full overflow-y-auto overscroll-contain'
+                                          : '',
+                                  ]
                                 : 'flex-nowrap'
                         "
                     >
@@ -186,14 +209,13 @@ watch(
                                 v-if="item.post"
                                 :post="item.post"
                                 :timezone="timezone"
-                                layout="week"
-                                class="flex-1"
-                                :class="{
-                                    'min-h-7 grow-0': isExpanded(
-                                        column.key,
-                                        hour,
-                                    ),
-                                }"
+                                :layout="
+                                    isStacked(column, hour)
+                                        ? 'month'
+                                        : 'week'
+                                "
+                                :compact="iconOnly"
+                                :class="chipClass(column, hour)"
                             />
                             <CalendarSlotChip
                                 v-else-if="item.slot"
@@ -201,13 +223,8 @@ watch(
                                 :channel="channels[item.slot.channel_id] ?? null"
                                 :timezone="timezone"
                                 :can-create-post="canCreatePost"
-                                class="flex-1"
-                                :class="{
-                                    'min-h-7 grow-0': isExpanded(
-                                        column.key,
-                                        hour,
-                                    ),
-                                }"
+                                :compact="iconOnly"
+                                :class="chipClass(column, hour)"
                             />
                         </template>
                         <button
@@ -217,7 +234,7 @@ watch(
                                     MAX_CHIPS
                             "
                             type="button"
-                            class="flex h-7 shrink-0 items-center rounded-lg px-1.5 text-xs font-medium text-muted-foreground transition-control hover:bg-secondary hover:text-foreground"
+                            class="flex h-7 w-full shrink-0 items-center rounded-lg px-1.5 text-xs font-medium text-muted-foreground transition-control hover:bg-secondary hover:text-foreground"
                             :data-testid="`calendar-more-${column.key}-${hourLabel(hour)}`"
                             @click="expandHour(column.key, hour)"
                         >
@@ -233,7 +250,7 @@ watch(
                         v-if="canCreatePost && !isPastSlot(column.key, hour)"
                         type="button"
                         :aria-label="$t('calendar.new_post')"
-                        class="flex size-6 shrink-0 items-center justify-center rounded-md border border-border-strong bg-card text-muted-foreground opacity-0 transition-opacity duration-100 ease-in-out group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 max-md:hidden [@media(hover:none)]:opacity-100"
+                        class="flex size-7 shrink-0 items-center justify-center rounded-lg border border-dashed border-border-strong text-muted-foreground opacity-0 transition-opacity duration-100 ease-in-out group-hover:opacity-100 hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100 max-md:hidden [@media(hover:none)]:opacity-100"
                         :data-testid="`calendar-add-${column.key}-${hourLabel(hour)}`"
                         @click="compose(column.key, hour)"
                     >

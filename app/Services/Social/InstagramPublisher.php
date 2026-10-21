@@ -6,16 +6,18 @@ namespace App\Services\Social;
 
 use App\Dto\MediaItem;
 use App\Enums\Instagram\ContainerStatus;
+use App\Enums\Instagram\TrialGraduation;
 use App\Enums\PostPlatform\ContentType;
 use App\Enums\SocialAccount\Platform;
 use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\ErrorCategory;
 use App\Exceptions\Social\InstagramPublishException;
 use App\Exceptions\Social\SocialPublishException;
-use App\Models\PostPlatform;
+use App\Models\Post;
 use App\Services\Social\Concerns\FitsImageToCanvas;
 use App\Services\Social\Concerns\HasSocialHttpClient;
 use App\Services\Social\Meta\GraphError;
+use App\Support\PostPlatformMetaRules;
 use App\Support\Social\PublishCheckpoint;
 use Closure;
 use Illuminate\Http\Client\ConnectionException;
@@ -29,7 +31,7 @@ class InstagramPublisher
 
     private string $baseUrl;
 
-    private PostPlatform $postPlatform;
+    private Post $post;
 
     private const int STATUS_RETRY_DELAY_SECONDS = 60;
 
@@ -40,12 +42,12 @@ class InstagramPublisher
 
     private const string WORKFLOW_FINAL_CONTAINER = 'final_container';
 
-    public function publish(PostPlatform $postPlatform): array
+    public function publish(Post $post): array
     {
-        $this->postPlatform = $postPlatform;
-        $this->validateContentLength($postPlatform);
+        $this->post = $post;
+        $this->validateContentLength($post);
 
-        $account = $postPlatform->socialAccount;
+        $account = $post->socialAccount;
         $this->baseUrl = $account->platform->instagramGraphBaseUrl();
 
         if ($account->needsProactiveTokenRefresh()) {
@@ -55,15 +57,15 @@ class InstagramPublisher
         $instagramId = $account->platform_user_id;
         $accessToken = $account->access_token;
 
-        $content = $postPlatform->post->content ? app(ContentSanitizer::class)->sanitize($postPlatform->post->content, $postPlatform->platform) : null;
+        $content = app(ContentSanitizer::class)->forPost($post);
 
-        $pendingWorkflow = PublishCheckpoint::instagramWorkflow($postPlatform->error_context);
+        $pendingWorkflow = PublishCheckpoint::instagramWorkflow($post->error_context);
 
         if ($pendingWorkflow !== null) {
             return $this->resumeWorkflow($instagramId, $accessToken, $content, $pendingWorkflow);
         }
 
-        $media = $postPlatform->post->mediaItems;
+        $media = $post->mediaItems;
 
         if ($media->isEmpty()) {
             throw new InstagramPublishException(
@@ -73,7 +75,7 @@ class InstagramPublisher
         }
 
         $firstMedia = $media->first();
-        $contentType = $postPlatform->content_type;
+        $contentType = $post->content_type;
 
         return match ($contentType) {
             ContentType::InstagramReel => $this->publishReel($instagramId, $accessToken, $content, $firstMedia),
@@ -115,7 +117,7 @@ class InstagramPublisher
             $params['alt_text'] = $alt;
         }
 
-        $params = [...$params, ...$this->userTagsParam($media->userTags()), ...$this->sharedOptions()];
+        $params = [...$params, ...$this->jsonListParam('user_tags', $media->userTags()), ...$this->sharedOptions(), ...$this->collaboratorsParam()];
 
         $containerId = $this->createContainer($instagramId, $params, 'container');
 
@@ -131,6 +133,7 @@ class InstagramPublisher
             'access_token' => $accessToken,
             ...$this->thumbOffsetParam($media),
             ...$this->sharedOptions(),
+            ...$this->collaboratorsParam(),
             ...$this->reelOptions(),
         ], 'reel container');
 
@@ -152,7 +155,7 @@ class InstagramPublisher
         } else {
             $dimensions = ContentType::InstagramStory->preferredImageDimensions();
             $params['image_url'] = $this->fitImageToCanvas($media->url, data_get($dimensions, 'width'), data_get($dimensions, 'height'));
-            $params = [...$params, ...$this->userTagsParam(array_map(
+            $params = [...$params, ...$this->jsonListParam('user_tags', array_map(
                 fn (array $tag): array => ['username' => $tag['username']],
                 $media->userTags(),
             ))];
@@ -190,7 +193,7 @@ class InstagramPublisher
                     $params['alt_text'] = $alt;
                 }
 
-                $params = [...$params, ...$this->userTagsParam($media->userTags())];
+                $params = [...$params, ...$this->jsonListParam('user_tags', $media->userTags())];
             }
 
             $containerResponse = $this->socialHttp()->post("{$this->baseUrl}/{$instagramId}/media", $params);
@@ -229,15 +232,15 @@ class InstagramPublisher
     }
 
     /**
-     * Instagram reads `user_tags` as a JSON array. Stories place the mention
-     * without a sticker, so their entries carry only the username.
+     * Instagram reads list parameters (`user_tags`, `collaborators`) as JSON
+     * arrays, and an empty one is left out.
      *
-     * @param  list<array<string, string|float>>  $tags
+     * @param  list<mixed>  $values
      * @return array<string, string>
      */
-    private function userTagsParam(array $tags): array
+    private function jsonListParam(string $name, array $values): array
     {
-        return $tags === [] ? [] : ['user_tags' => (string) json_encode($tags)];
+        return $values === [] ? [] : [$name => (string) json_encode($values)];
     }
 
     /**
@@ -249,7 +252,7 @@ class InstagramPublisher
     private function sharedOptions(): array
     {
         return array_filter([
-            'is_ai_generated' => data_get($this->postPlatform->meta, 'is_ai_generated') === true ? 'true' : null,
+            'is_ai_generated' => data_get($this->post->meta, 'is_ai_generated') === true ? 'true' : null,
         ], fn (?string $value): bool => $value !== null);
     }
 
@@ -261,13 +264,68 @@ class InstagramPublisher
      */
     private function reelOptions(): array
     {
-        if ($this->postPlatform->content_type !== ContentType::InstagramReel) {
+        if ($this->post->content_type !== ContentType::InstagramReel) {
             return [];
         }
 
-        return [
-            'share_to_feed' => data_get($this->postPlatform->meta, 'share_to_feed', true) ? 'true' : 'false',
-        ];
+        return array_filter([
+            'share_to_feed' => data_get($this->post->meta, 'share_to_feed', true) ? 'true' : 'false',
+            'trial_params' => $this->trialParams(),
+            'audio_configuration' => $this->audioConfiguration(),
+        ]);
+    }
+
+    /**
+     * A trial reel is shown to non-followers first, then graduated by hand
+     * or by Instagram when it performs well.
+     */
+    private function trialParams(): ?string
+    {
+        return transform(
+            TrialGraduation::tryFrom((string) data_get($this->post->meta, 'trial_graduation')),
+            fn (TrialGraduation $graduation): string => (string) json_encode(['graduation_strategy' => $graduation->value]),
+        );
+    }
+
+    /**
+     * The picked music, which the Audio API only takes from an account
+     * connected through Facebook. A volume left out is Instagram's default.
+     */
+    private function audioConfiguration(): ?string
+    {
+        $audioId = data_get($this->post->meta, 'audio.id');
+
+        if (blank($audioId)) {
+            return null;
+        }
+
+        if ($this->post->socialAccount?->platform !== Platform::InstagramFacebook) {
+            throw new InstagramPublishException(
+                userMessage: __('posts.form.instagram.music.requires_facebook'),
+                category: ErrorCategory::ContentPolicy,
+            );
+        }
+
+        $volume = fn (string $key): ?int => transform(data_get($this->post->meta, "audio.{$key}"), fn (mixed $value): int => (int) $value);
+
+        return (string) json_encode(array_filter([
+            'audio_id' => (string) $audioId,
+            'audio_volume' => $volume('audio_volume'),
+            'video_volume' => $volume('video_volume'),
+        ], fn (mixed $value): bool => $value !== null));
+    }
+
+    /**
+     * Instagram reads `collaborators` as a JSON array of usernames. Stories and
+     * carousel children take none.
+     *
+     * @return array{collaborators?: string}
+     */
+    private function collaboratorsParam(): array
+    {
+        return $this->jsonListParam('collaborators', PostPlatformMetaRules::instagramCollaborators(
+            (array) data_get($this->post->meta, 'collaborators', []),
+        ));
     }
 
     /**
@@ -302,6 +360,7 @@ class InstagramPublisher
             'children' => implode(',', $childContainers),
             'access_token' => $accessToken,
             ...$this->sharedOptions(),
+            ...$this->collaboratorsParam(),
         ], 'carousel container');
 
         return $this->finishContainer($instagramId, $accessToken, $carouselId);
@@ -458,9 +517,9 @@ class InstagramPublisher
      */
     private function rememberPublishedMedia(string $containerId, string $mediaId): void
     {
-        $this->postPlatform->update([
+        $this->post->writePublication([
             'error_context' => [
-                ...($this->postPlatform->error_context ?? []),
+                ...($this->post->error_context ?? []),
                 PublishCheckpoint::INSTAGRAM_WORKFLOW => [
                     'stage' => self::WORKFLOW_FINAL_CONTAINER,
                     'container_id' => $containerId,

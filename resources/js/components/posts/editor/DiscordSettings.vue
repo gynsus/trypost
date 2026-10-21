@@ -14,7 +14,7 @@ import SettingsSection from '@/components/posts/editor/SettingsSection.vue';
 import SearchableSelect from '@/components/SearchableSelect.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { usePageErrors } from '@/composables/usePageErrors';
+import { useMetaErrors } from '@/composables/useMetaErrors';
 
 interface SocialAccount {
     id: string;
@@ -55,6 +55,7 @@ const props = withDefaults(
     defineProps<{
         socialAccount: SocialAccount | null;
         meta: Record<string, any>;
+        platformIndex: number;
         disabled?: boolean;
     }>(),
     { disabled: false },
@@ -95,7 +96,13 @@ onMounted(loadChannels);
 
 const channelId = computed({
     get: () => (props.meta?.channel_id as string) ?? '',
-    set: (value: string) => updateMeta({ channel_id: value || null }),
+    set: (value: string) =>
+        updateMeta({
+            channel_id: value || null,
+            channel_name:
+                channelOptions.value.find((channel) => channel.id === value)
+                    ?.name ?? null,
+        }),
 });
 
 const channelOptions = computed<DiscordChannel[]>(() => {
@@ -104,7 +111,10 @@ const channelOptions = computed<DiscordChannel[]>(() => {
         !channels.value.some((channel) => channel.id === channelId.value)
     ) {
         return [
-            { id: channelId.value, name: channelId.value },
+            {
+                id: channelId.value,
+                name: props.meta?.channel_name ?? channelId.value,
+            },
             ...channels.value,
         ];
     }
@@ -119,30 +129,10 @@ const channelSelectOptions = computed(() =>
     })),
 );
 
-watch(
-    [channelId, channels],
-    () => {
-        const name = channels.value.find(
-            (channel) => channel.id === channelId.value,
-        )?.name;
-
-        if (name && props.meta?.channel_name !== name) {
-            updateMeta({ channel_name: name });
-        }
-    },
-    { immediate: true },
+const storedChannelError = useMetaErrors(() => props.platformIndex)('channel_id');
+const channelError = computed(() =>
+    props.meta?.channel_id ? undefined : storedChannelError.value,
 );
-
-const errors = usePageErrors();
-const channelError = computed<string | undefined>(() => {
-    if (props.meta?.channel_id) {
-        return undefined;
-    }
-
-    return Object.entries(errors.value).find(([key]) =>
-        key.endsWith('.meta.channel_id'),
-    )?.[1];
-});
 
 const mentionQuery = ref('');
 const mentionResults = ref<MentionTarget[]>([]);

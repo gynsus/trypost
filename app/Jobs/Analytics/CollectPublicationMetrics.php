@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Jobs\Analytics;
 
-use App\Actions\Analytics\UpsertAnalyticsPublication;
 use App\Actions\Analytics\WritePublicationDailySnapshot;
+use App\Actions\Post\AssignTikTokVideoId;
 use App\Enums\Analytics\PublicationAvailability;
 use App\Enums\Analytics\PublicationContentType;
 use App\Enums\SocialAccount\Platform;
@@ -82,7 +82,7 @@ class CollectPublicationMetrics implements ShouldQueue
 
     public function handle(
         PublicationMetricsCollectorFactory $collectors,
-        UpsertAnalyticsPublication $publications,
+        AssignTikTokVideoId $assignVideoId,
         WritePublicationDailySnapshot $writer,
         AnalyticsJobLog $log,
     ): void {
@@ -96,39 +96,42 @@ class CollectPublicationMetrics implements ShouldQueue
         }
 
         $publication = AnalyticsPublication::query()->available()->find($this->publicationId);
-        $account = $publication ? SocialAccount::query()
+        $channel = $publication ? SocialAccount::query()
             ->connected()
             ->includedInAnalytics()
             ->find($publication->social_account_id) : null;
 
-        if (! $publication || ! $account || ! $this->eligible($publication, $account, $date)) {
+        if (! $publication
+            || ! $channel?->workspace->account->hasAppAccess()
+            || ! $this->eligible($publication, $channel, $date)) {
             return;
         }
 
-        $publication->setRelation('socialAccount', $account);
+        $publication->setRelation('socialAccount', $channel);
 
         try {
             $collector = $collectors->for($publication->platform);
 
             if ($collector instanceof TikTokPublicationMetricsCollector
-                && $publication->post_platform_id
-                && ! ctype_digit($publication->remote_id)) {
-                $publications->reconcileRemoteId($publication, $collector->publicVideoId($publication));
+                && ! ctype_digit($publication->remote_id)
+                && filled($publication->post)) {
+                $assignVideoId->handle($publication->post, $collector->publicVideoId($publication));
+                $publication->refresh()->setRelation('socialAccount', $channel);
             }
 
             $observation = $collector->collect($publication, $date);
             $writer->handle($publication, $observation);
-            $log->record($account, 'publication_metrics', $this->observationDate, $this->attempts(), 'actual');
+            $log->record($channel, 'publication_metrics', $this->observationDate, $this->attempts(), 'actual');
 
             if ($publication->metric_failures > 0) {
                 $publication->forceFill(['metric_failures' => 0])->save();
             }
         } catch (AnalyticsCollectionException $exception) {
-            $log->record($account, 'publication_metrics', $this->observationDate, $this->attempts(), $exception->category);
+            $log->record($channel, 'publication_metrics', $this->observationDate, $this->attempts(), $exception->category);
             $this->recordTerminalFailure($publication, $exception);
             $this->retry($publication, $date, $exception->category, $exception->retryAt, $log);
         } catch (ConnectionException) {
-            $log->record($account, 'publication_metrics', $this->observationDate, $this->attempts(), 'transient');
+            $log->record($channel, 'publication_metrics', $this->observationDate, $this->attempts(), 'transient');
             $this->retry($publication, $date, 'transient', null, $log);
         }
     }
@@ -170,12 +173,9 @@ class CollectPublicationMetrics implements ShouldQueue
             return false;
         }
 
-        if (! $this->baseline && ! $isStory) {
-            $ageLimit = SyncCadence::metricsWindowDays($publication->platform);
-
-            if ($publication->provider_published_at->lessThan($date->subDays($ageLimit)->startOfDay())) {
-                return false;
-            }
+        if (! $this->baseline && ! $isStory
+            && $publication->provider_published_at->lessThan(SyncCadence::metricsWindowStart($publication->platform, $date))) {
+            return false;
         }
 
         return $this->refreshSameDay || ! AnalyticsPublicationDailySnapshot::query()

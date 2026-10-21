@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 use App\Enums\User\Goal;
 use App\Enums\User\Persona;
+use App\Enums\User\PreviousSoftware;
 use App\Enums\User\ReferralSource;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\User;
 use App\Models\Workspace;
 
@@ -55,12 +55,11 @@ test('key pages do not overflow horizontally on a phone', function () {
     $workspace->members()->attach($user->id, membershipPivot('member'));
     $user->update(['current_workspace_id' => $workspace->id]);
 
-    $post = Post::factory()->create([
+    $post = Post::factory()->linkedin()->create([
         'workspace_id' => $workspace->id,
         'user_id' => $user->id,
         'content' => 'Launching our new mobile editor today!',
     ]);
-    PostPlatform::factory()->count(2)->create(['post_id' => $post->id]);
 
     $this->actingAs($user);
 
@@ -93,6 +92,7 @@ test('auth and welcome pages do not overflow horizontally on a phone', function 
     $user->update([
         'persona' => Persona::Agency->value,
         'goals' => [Goal::SaveTime->value],
+        'previous_software' => PreviousSoftware::Buffer->value,
         'referral_source' => ReferralSource::ProductHunt->value,
     ]);
     $workspace = Workspace::factory()->create([
@@ -104,6 +104,7 @@ test('auth and welcome pages do not overflow horizontally on a phone', function 
     $this->actingAs($user->fresh());
 
     $welcomePages = [
+        'welcome software' => route('app.welcome.software'),
         'welcome plan' => route('app.welcome.plan'),
     ];
 

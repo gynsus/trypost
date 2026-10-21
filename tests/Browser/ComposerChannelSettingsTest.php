@@ -9,7 +9,6 @@ use App\Enums\SocialAccount\Platform;
 use App\Enums\User\TimeFormat;
 use App\Models\Media;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
@@ -22,7 +21,7 @@ use Illuminate\Support\Str;
 /**
  * @param  array<int, array<string, mixed>>  $media
  */
-function seedChannelSettingsPost(Platform $platform, ContentType $contentType, array $media = []): PostPlatform
+function seedChannelSettingsPost(Platform $platform, ContentType $contentType, array $media = []): Post
 {
     $user = User::factory()->create();
     $workspace = Workspace::factory()->create(['user_id' => $user->id]);
@@ -37,49 +36,20 @@ function seedChannelSettingsPost(Platform $platform, ContentType $contentType, a
         'token_expires_at' => now()->addDays(20),
     ]);
 
-    $post = Post::factory()->create([
-        'workspace_id' => $workspace->id,
+    $post = Post::factory()->forAccount($account, $contentType)->create([
         'user_id' => $user->id,
         'content' => 'Channel settings',
         'media' => $media,
     ]);
 
-    $postPlatform = PostPlatform::factory()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $account->id,
-        'platform' => $platform,
-        'content_type' => $contentType,
-        'meta' => [],
-    ]);
-
     test()->actingAs($user);
 
-    return $postPlatform;
+    return $post;
 }
 
-function waitForChannelSettingsCondition(mixed $page, string $condition): void
+function channelSettingsEventDay(int $daysAfterStart): string
 {
-    $page->script(<<<JS
-        (async () => {
-            for (let i = 0; i < 300; i++) {
-                if ({$condition}) return;
-                await new Promise((resolve) => setTimeout(resolve, 50));
-            }
-        })();
-    JS);
-}
-
-function waitForChannelSettingsTestId(mixed $page, string $testId): void
-{
-    waitForChannelSettingsCondition(
-        $page,
-        "document.querySelector('[data-testid=\"{$testId}\"]')?.getBoundingClientRect().height > 0",
-    );
-}
-
-function waitForChannelSettingsClosedMenu(mixed $page): void
-{
-    waitForChannelSettingsCondition($page, "!document.querySelector('[role=\"listbox\"]')");
+    return now()->addYear()->startOfDay()->addDays($daysAfterStart)->toDateString();
 }
 
 function fakeChannelSettingsApis(): void
@@ -108,10 +78,10 @@ function fakeChannelSettingsApis(): void
 
 test('every network with settings renders them as label and control rows under the editor', function (Platform $platform, ContentType $contentType, array $media) {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost($platform, $contentType, $media);
+    $post = seedChannelSettingsPost($platform, $contentType, $media);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'channel-settings-rows');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@channel-settings-rows');
 
     $layout = $page->script(<<<'JS'
         (() => {
@@ -165,11 +135,11 @@ test('every network with settings renders them as label and control rows under t
 
 test('the instagram channel card picks its content type from a radio row above the editor', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramFeed);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramFeed);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, "composer-type-{$id}-instagram_feed");
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, "@composer-type-{$id}-instagram_feed");
 
     $page->assertAttribute("@composer-type-{$id}-instagram_feed", 'aria-checked', 'true')
         ->assertAttribute("@composer-type-{$id}-instagram_reel", 'aria-checked', 'false')
@@ -185,58 +155,58 @@ test('the instagram channel card picks its content type from a radio row above t
     JS))->toBeTrue();
 
     $page->click("@composer-type-{$id}-instagram_reel");
-    waitForChannelSettingsCondition($page, "document.querySelector('[data-testid=\"composer-type-{$id}-instagram_reel\"]')?.getAttribute('aria-checked') === 'true'");
+    waitForState($page, "@composer-type-{$id}-instagram_reel", "element.getAttribute('aria-checked') === 'true'");
     $page->assertAttribute("@composer-type-{$id}-instagram_reel", 'aria-checked', 'true')
         ->assertNoJavaScriptErrors();
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
-    expect($postPlatform->fresh()->content_type)->toBe(ContentType::InstagramReel);
+    expect($post->fresh()->content_type)->toBe(ContentType::InstagramReel);
 });
 
 test('a pinterest pin takes its type from the media', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Pinterest, ContentType::PinterestPin);
-    $id = $postPlatform->social_account_id;
-    $images = Media::factory()->count(2)->temporaryUpload($postPlatform->post->workspace)->create(['mime_type' => 'image/png']);
-    $postPlatform->post->update(['media' => $images->map(fn (Media $media): array => MediaItem::fromMedia($media)->toArray())->all()]);
+    $post = seedChannelSettingsPost(Platform::Pinterest, ContentType::PinterestPin);
+    $id = $post->social_account_id;
+    $images = Media::factory()->count(2)->temporaryUpload($post->workspace)->create(['mime_type' => 'image/png']);
+    $post->update(['media' => $images->map(fn (Media $media): array => MediaItem::fromMedia($media)->toArray())->all()]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'pinterest-board-trigger');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@pinterest-board-trigger');
 
     $page->assertMissing("@composer-type-{$id}")
         ->assertNoJavaScriptErrors()
         ->click('@composer-save-draft')
         ->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->content_type)->toBe(ContentType::PinterestCarousel);
+    expect($post->fresh()->content_type)->toBe(ContentType::PinterestCarousel);
 });
 
 test('the pinterest board picker searches, refreshes and creates boards', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Pinterest, ContentType::PinterestPin);
+    $post = seedChannelSettingsPost(Platform::Pinterest, ContentType::PinterestPin);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'pinterest-board-trigger');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@pinterest-board-trigger');
 
     $page->click('@pinterest-board-trigger');
-    waitForChannelSettingsTestId($page, 'pinterest-board-option-board_1');
+    waitFor($page, '@pinterest-board-option-board_1');
     $page->assertSeeIn('@pinterest-board-picker', '@trypostit')
         ->assertVisible('@pinterest-board-option-board_2');
     expect($page->script("!!document.querySelector('[data-testid=\"pinterest-board-option-board_1\"] img')"))->toBeTrue();
 
-    $page->fill('@pinterest-board-search', 'dis');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"pinterest-board-option-board_2\"]')");
+    $page->fill('@pinterest-board-search', 'DÍS');
+    waitForGone($page, '@pinterest-board-option-board_2');
     $page->assertMissing('@pinterest-board-option-board_2')
         ->assertVisible('@pinterest-board-option-board_1')
         ->fill('@pinterest-board-search', '');
 
     $page->click('@pinterest-boards-refresh');
-    waitForChannelSettingsTestId($page, 'pinterest-board-option-board_3');
+    waitFor($page, '@pinterest-board-option-board_3');
     $page->assertSeeIn('@pinterest-board-option-board_3', 'Universal');
 
     $page->fill('@pinterest-board-new-name', 'Recipes')
         ->click('@pinterest-board-create');
-    waitForChannelSettingsTestId($page, 'pinterest-board-selected');
+    waitFor($page, '@pinterest-board-selected');
     $page->assertSeeIn('@pinterest-board-selected', 'Recipes')
         ->assertMissing('@pinterest-board-picker')
         ->assertNoJavaScriptErrors();
@@ -246,26 +216,26 @@ test('the pinterest board picker searches, refreshes and creates boards', functi
         && $request->data() === ['name' => 'Recipes']);
 
     $page->click('@pinterest-board-trigger');
-    waitForChannelSettingsTestId($page, 'pinterest-board-new-name');
+    waitFor($page, '@pinterest-board-new-name');
     expect($page->script("document.querySelector('[data-testid=\"pinterest-board-new-name\"]').value"))->toBe('');
 
     $page->click('@pinterest-boards-refresh');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"pinterest-board-option-board_new\"]')");
+    waitForGone($page, '@pinterest-board-option-board_new');
     $page->assertMissing('@pinterest-board-option-board_new')
         ->assertVisible('@pinterest-board-option-board_3');
     $page->click('@pinterest-board-option-board_3');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"pinterest-board-picker\"]')");
+    waitForGone($page, '@pinterest-board-picker');
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
-    expect(data_get($postPlatform->fresh()->meta, 'board_id'))->toBe('board_3');
+    expect(data_get($post->fresh()->meta, 'board_id'))->toBe('board_3');
 });
 
 test('the google business card picks its type in the header and lists the fields in the reference order', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
+    $post = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'google-business-topic-STANDARD');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@google-business-topic-STANDARD');
     $fields = <<<'JS'
         [...document.querySelectorAll('[data-testid="composer-customization"] [data-testid^="google-business-"]')]
             .map((node) => node.dataset.testid)
@@ -279,29 +249,29 @@ test('the google business card picks its type in the header and lists the fields
         ->and($page->script($fields))->toBe(['google-business-cta']);
 
     $page->click('@google-business-topic-OFFER');
-    waitForChannelSettingsTestId($page, 'google-business-add-details');
+    waitFor($page, '@google-business-add-details');
     expect($page->script($fields))->toBe(['google-business-title', 'google-business-start', 'google-business-end', 'google-business-add-details'])
         ->and($page->script("document.querySelector('[data-testid=\"google-business-add-details\"]').getAttribute('aria-checked')"))->toBe('false');
 
     $page->click('@google-business-topic-STANDARD');
-    waitForChannelSettingsTestId($page, 'google-business-cta');
+    waitFor($page, '@google-business-cta');
     $page->click('@google-business-cta');
-    waitForChannelSettingsTestId($page, 'google-business-cta-option-BOOK');
+    waitFor($page, '@google-business-cta-option-BOOK');
     $page->click('@google-business-cta-option-BOOK');
-    waitForChannelSettingsTestId($page, 'google-business-cta-url');
+    waitFor($page, '@google-business-cta-url');
     $page->fill('@google-business-cta-url', 'https://trypost.it/book')
         ->click('@google-business-topic-OFFER');
-    waitForChannelSettingsTestId($page, 'google-business-redeem');
+    waitFor($page, '@google-business-redeem');
 
     expect($page->script($fields))->toBe(['google-business-title', 'google-business-start', 'google-business-end',
         'google-business-add-details', 'google-business-coupon', 'google-business-redeem', 'google-business-terms']);
     $page->assertValue('@google-business-redeem', 'https://trypost.it/book')
         ->click('@google-business-add-details');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"google-business-coupon\"]')");
+    waitForGone($page, '@google-business-coupon');
     $page->assertMissing('@google-business-redeem');
 
     $page->click('@google-business-topic-EVENT');
-    waitForChannelSettingsTestId($page, 'google-business-add-time');
+    waitFor($page, '@google-business-add-time');
     expect($page->script($fields))->toBe(['google-business-title', 'google-business-add-time', 'google-business-start',
         'google-business-end', 'google-business-cta']);
 
@@ -310,7 +280,7 @@ test('the google business card picks its type in the header and lists the fields
         ->click('@composer-save-draft')
         ->assertMissing('@post-composer-dialog');
 
-    $meta = $postPlatform->fresh()->meta;
+    $meta = $post->fresh()->meta;
     expect(data_get($meta, 'topic_type'))->toBe('EVENT')
         ->and(data_get($meta, 'event.title'))->toBe('Launch night')
         ->and(data_get($meta, 'event.start_date'))->not->toBeNull()
@@ -322,37 +292,37 @@ test('the google business card picks its type in the header and lists the fields
 
 test('the google business panel shows a server validation error under its field', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
+    $post = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'google-business-cta');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@google-business-cta');
     $page->click('@google-business-cta');
-    waitForChannelSettingsTestId($page, 'google-business-cta-option-BOOK');
+    waitFor($page, '@google-business-cta-option-BOOK');
     $page->click('@google-business-cta-option-BOOK');
-    waitForChannelSettingsTestId($page, 'google-business-cta-url');
+    waitFor($page, '@google-business-cta-url');
     $page->fill('@google-business-cta-url', 'not a link')
         ->click('@composer-save-draft');
-    waitForChannelSettingsCondition($page, "document.querySelector('[data-testid=\"google-business-cta-url\"]')?.getAttribute('aria-invalid') === 'true'");
+    waitForState($page, '@google-business-cta-url', "element.getAttribute('aria-invalid') === 'true'");
 
     expect($page->script("document.querySelector('[data-testid=\"google-business-cta-url\"]').getAttribute('aria-invalid')"))->toBe('true')
         ->and($page->script("document.querySelector('[data-testid=\"google-business-cta-url\"]').closest('[data-testid=\"channel-settings-row\"]').textContent"))
         ->toContain(__('validation.url', ['attribute' => __('posts.form.google_business.cta_url')]));
     $page->assertVisible('@post-composer-dialog')
         ->assertNoJavaScriptErrors();
-    expect(data_get($postPlatform->fresh()->meta, 'call_to_action'))->toBeNull();
+    expect(data_get($post->fresh()->meta, 'call_to_action'))->toBeNull();
 });
 
 test('the google business event shows start and end time fields beside the dates when add time is on', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
-    $postPlatform->update(['meta' => ['topic_type' => 'EVENT', 'event' => ['title' => 'Launch night', 'start_date' => '2037-03-10', 'end_date' => '2037-03-12']]]);
+    $post = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
+    $post->update(['meta' => ['topic_type' => 'EVENT', 'event' => ['title' => 'Launch night', 'start_date' => channelSettingsEventDay(0), 'end_date' => channelSettingsEventDay(2)]]]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'google-business-add-time');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@google-business-add-time');
     $page->assertMissing('@google-business-start-time')
         ->assertMissing('@google-business-end-time')
         ->click('@google-business-add-time');
-    waitForChannelSettingsTestId($page, 'google-business-start-time');
+    waitFor($page, '@google-business-start-time');
 
     $layout = $page->script(<<<'JS'
         (() => {
@@ -374,10 +344,10 @@ test('the google business event shows start and end time fields beside the dates
         ->click('@composer-save-draft')
         ->assertMissing('@post-composer-dialog');
 
-    expect(data_get($postPlatform->fresh()->meta, 'event'))->toEqual([
+    expect(data_get($post->fresh()->meta, 'event'))->toEqual([
         'title' => 'Launch night',
-        'start_date' => '2037-03-10',
-        'end_date' => '2037-03-12',
+        'start_date' => channelSettingsEventDay(0),
+        'end_date' => channelSettingsEventDay(2),
         'start_time' => '18:30',
         'end_time' => '21:00',
     ]);
@@ -385,10 +355,10 @@ test('the google business event shows start and end time fields beside the dates
 
 test('the youtube card saves its fields in the reference order with the AI label last', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::YouTube, ContentType::YouTubeShort);
+    $post = seedChannelSettingsPost(Platform::YouTube, ContentType::YouTubeShort);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'youtube-title');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@youtube-title');
 
     $order = ['youtube-title', 'youtube-category', 'youtube-privacy', 'youtube-license',
         'youtube-notify-subscribers', 'youtube-embeddable', 'youtube-made-for-kids', 'youtube-ai-generated'];
@@ -409,17 +379,17 @@ test('the youtube card saves its fields in the reference order with the AI label
         ->assertValue('@youtube-title', 'Channel settings')
         ->fill('@youtube-title', 'Explicit title')
         ->click('@youtube-category');
-    waitForChannelSettingsTestId($page, 'youtube-category-27');
+    waitFor($page, '@youtube-category-27');
     $page->click('@youtube-category-27');
-    waitForChannelSettingsClosedMenu($page);
+    waitForGone($page, '[role="listbox"]');
     $page->click('@youtube-privacy');
-    waitForChannelSettingsTestId($page, 'youtube-privacy-unlisted');
+    waitFor($page, '@youtube-privacy-unlisted');
     $page->click('@youtube-privacy-unlisted');
-    waitForChannelSettingsClosedMenu($page);
+    waitForGone($page, '[role="listbox"]');
     $page->click('@youtube-license');
-    waitForChannelSettingsTestId($page, 'youtube-license-creativeCommon');
+    waitFor($page, '@youtube-license-creativeCommon');
     $page->click('@youtube-license-creativeCommon');
-    waitForChannelSettingsClosedMenu($page);
+    waitForGone($page, '[role="listbox"]');
     $page->click('@youtube-notify-subscribers')
         ->click('@youtube-made-for-kids')
         ->click('@youtube-ai-generated')
@@ -428,7 +398,7 @@ test('the youtube card saves its fields in the reference order with the AI label
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta)->toEqual([
+    expect($post->fresh()->meta)->toEqual([
         'title' => 'Explicit title',
         'category_id' => '27',
         'privacy_status' => 'unlisted',
@@ -441,10 +411,10 @@ test('the youtube card saves its fields in the reference order with the AI label
 
 test('the tiktok AI label is the last row and saves is_aigc', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo);
+    $post = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'tiktok-ai-generated');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@tiktok-ai-generated');
 
     expect($page->script(<<<'JS'
         (() => {
@@ -458,37 +428,37 @@ test('the tiktok AI label is the last row and saves is_aigc', function () {
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect(data_get($postPlatform->fresh()->meta, 'is_aigc'))->toBeTrue();
+    expect(data_get($post->fresh()->meta, 'is_aigc'))->toBeTrue();
 });
 
 test('google business seeds event dates in the user time zone and an offer drops the event times', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
+    $post = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
     $timezone = now('Pacific/Kiritimati')->toDateString() === now('UTC')->toDateString() ? 'Pacific/Pago_Pago' : 'Pacific/Kiritimati';
-    $postPlatform->post->user->update(['timezone' => $timezone]);
-    $this->actingAs($postPlatform->post->user->fresh());
+    $post->user->update(['timezone' => $timezone]);
+    $this->actingAs($post->user->fresh());
     $today = now($timezone);
 
     expect($today->format('Y-m-d'))->not->toBe(now('UTC')->format('Y-m-d'));
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->withTimezone('UTC')->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'google-business-topic-EVENT');
+    $page = visit(route('app.posts.edit', $post))->withTimezone('UTC')->resize(1280, 900);
+    waitFor($page, '@google-business-topic-EVENT');
     $page->click('@google-business-topic-EVENT');
-    waitForChannelSettingsTestId($page, 'google-business-add-time');
+    waitFor($page, '@google-business-add-time');
     $page->fill('@google-business-title', 'Launch night')
         ->click('@google-business-add-time');
-    waitForChannelSettingsTestId($page, 'google-business-start-time');
+    waitFor($page, '@google-business-start-time');
     $page->fill('@google-business-start-time', '18:30')
         ->fill('@google-business-end-time', '21:00')
         ->click('@google-business-topic-OFFER');
-    waitForChannelSettingsTestId($page, 'google-business-add-details');
+    waitFor($page, '@google-business-add-details');
 
     $page->assertMissing('@google-business-start-time')
         ->assertNoJavaScriptErrors()
         ->click('@composer-save-draft')
         ->assertMissing('@post-composer-dialog');
 
-    $meta = $postPlatform->fresh()->meta;
+    $meta = $post->fresh()->meta;
     expect(data_get($meta, 'topic_type'))->toBe('OFFER')
         ->and(data_get($meta, 'event'))->toEqual([
             'title' => 'Launch night',
@@ -501,11 +471,11 @@ test('google business seeds event dates in the user time zone and an offer drops
 
 test('the instagram card shows share to feed on reels, the AI label last and on every type', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'instagram-share-to-feed');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-share-to-feed');
 
     expect($page->script("document.querySelector('[data-testid=\"instagram-share-to-feed\"]').getAttribute('aria-checked')"))->toBe('true')
         ->and($page->script(<<<'JS'
@@ -528,30 +498,329 @@ test('the instagram card shows share to feed on reels, the AI label last and on 
     $page->click('@instagram-share-to-feed')
         ->click('@instagram-ai-generated')
         ->click("@composer-type-{$id}-instagram_story");
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"instagram-share-to-feed\"]')");
-    waitForChannelSettingsTestId($page, 'instagram-ai-generated');
+    waitForGone($page, '@instagram-share-to-feed');
+    waitFor($page, '@instagram-ai-generated');
     $page->click("@composer-type-{$id}-instagram_feed");
-    waitForChannelSettingsTestId($page, 'instagram-ai-generated');
+    waitFor($page, '@instagram-ai-generated');
     $page->assertMissing('@instagram-share-to-feed')
         ->click("@composer-type-{$id}-instagram_reel");
-    waitForChannelSettingsTestId($page, 'instagram-share-to-feed');
+    waitFor($page, '@instagram-share-to-feed');
     $page->assertNoJavaScriptErrors();
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta)->toEqual([
+    expect($post->fresh()->meta)->toEqual([
         'share_to_feed' => false,
         'is_ai_generated' => true,
     ]);
 });
 
+test('the instagram reel card adds collaborators and a checked trial reel, and asks to link Facebook for music', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-link-facebook');
+    $page->assertPresent('@instagram-music-save-and-link')
+        ->click('@instagram-music-maybe-later');
+    waitForGone($page, '@instagram-music-link-facebook');
+
+    $page->type('@instagram-collaborator-input', '@alice')
+        ->keys('@instagram-collaborator-input', 'Enter');
+    waitFor($page, '@instagram-collaborators-notice');
+    $page->assertPresent('@instagram-collaborator-alice')
+        ->assertPresent('@instagram-trial-reel-unavailable')
+        ->click('@instagram-collaborators-notice-dismiss');
+    waitForGone($page, '@instagram-collaborators-notice');
+
+    $page->type('@instagram-collaborator-input', 'bob')
+        ->click('@instagram-collaborator-add');
+    waitFor($page, '@instagram-collaborator-bob');
+
+    $page->click('@instagram-collaborator-remove-alice')
+        ->click('@instagram-collaborator-remove-bob');
+    waitFor($page, '@instagram-trial-reel-MANUAL');
+    $page->click('@instagram-trial-reel-MANUAL');
+    waitFor($page, '@instagram-trial-reel-check');
+    $page->assertVisible('@instagram-trial-reel-illustration')
+        ->click('@instagram-trial-reel-check-no');
+    waitForGone($page, '@instagram-trial-reel-check');
+    $page->assertAttribute('@instagram-trial-reel-off', 'aria-checked', 'true')
+        ->click('@instagram-trial-reel-MANUAL');
+    waitFor($page, '@instagram-trial-reel-check');
+    $page->click('@instagram-trial-reel-check-yes');
+    waitForState($page, '@instagram-trial-reel-MANUAL', "element.getAttribute('aria-checked') === 'true'");
+    $page->assertNoJavaScriptErrors();
+
+    $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
+
+    expect(data_get($post->fresh()->meta, 'trial_graduation'))->toBe('MANUAL')
+        ->and(data_get($post->fresh()->meta, 'collaborators'))->toBe([]);
+});
+
+test('save and link keeps a scheduled reel scheduled and opens the Facebook requirements to reconnect the account', function () {
+    fakeChannelSettingsApis();
+    $video = [['id' => (string) Str::uuid(), 'type' => 'video', 'path' => 'medias/clip.mp4', 'url' => 'https://example.com/clip.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'clip.mp4']];
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel, $video);
+    $post->update(['status' => Status::Scheduled, 'scheduled_at' => now()->addDay()]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-save-and-link');
+    $page->click('@instagram-music-save-and-link');
+    waitFor($page, '@instagram-facebook-requirements');
+
+    $page->assertMissing('@post-composer-dialog')
+        ->assertPresent('@instagram-facebook-requirements-connect')
+        ->assertNoJavaScriptErrors();
+    expect($post->fresh()->status)->toBe(Status::Scheduled);
+
+    $page->script(<<<'JS'
+        document.addEventListener('inertia:before', (event) => {
+            window.__connectUrl = event.detail.visit.url.href;
+            event.preventDefault();
+        });
+    JS);
+    $page->click('@instagram-facebook-requirements-connect');
+    waitForCondition($page, 'window.__connectUrl !== undefined');
+
+    expect($page->script('window.__connectUrl'))->toContain("reconnect={$post->social_account_id}");
+});
+
+test('save and link never publishes a scheduled reel switched to share now', function () {
+    fakeChannelSettingsApis();
+    $video = [['id' => (string) Str::uuid(), 'type' => 'video', 'path' => 'medias/clip.mp4', 'url' => 'https://example.com/clip.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'clip.mp4']];
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel, $video);
+    $post->update(['status' => Status::Scheduled, 'scheduled_at' => now()->addDay()]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@composer-schedule-trigger');
+    $page->click('@composer-schedule-trigger');
+    waitFor($page, '@composer-schedule-more-actions');
+    $page->click('@composer-schedule-more-actions');
+    waitFor($page, '@composer-schedule-now');
+    $page->click('@composer-schedule-now');
+    waitForState($page, '@composer-submit', "element.dataset.scheduleMode === 'now'");
+
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-save-and-link');
+    $page->click('@instagram-music-save-and-link');
+    waitFor($page, '@instagram-facebook-requirements');
+
+    $page->assertNoJavaScriptErrors();
+    expect($post->fresh()->status)->toBe(Status::Draft);
+});
+
+test('save and link explains why a scheduled reel that cannot be saved stays open', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+    $post->update(['status' => Status::Scheduled, 'scheduled_at' => now()->addDay()]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-save-and-link');
+    $page->click('@instagram-music-save-and-link');
+    waitFor($page, '@instagram-music-save-and-link-blocked');
+
+    $page->assertSee(__('posts.form.instagram.music.save_and_link_blocked'))
+        ->assertVisible('@post-composer-dialog')
+        ->assertMissing('@instagram-facebook-requirements')
+        ->assertNoJavaScriptErrors();
+    expect($post->fresh()->status)->toBe(Status::Scheduled);
+});
+
+test('save and link keeps a pending reel pending for a member who needs approval', function () {
+    fakeChannelSettingsApis();
+    $video = [['id' => (string) Str::uuid(), 'type' => 'video', 'path' => 'medias/clip.mp4', 'url' => 'https://example.com/clip.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'clip.mp4']];
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel, $video);
+    $post->workspace->members()->updateExistingPivot($post->user_id, membershipPivot('approval'));
+    $post->update(['status' => Status::PendingApproval, 'scheduled_at' => now()->addDay()]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-save-and-link');
+    $page->click('@instagram-music-save-and-link');
+    waitFor($page, '@instagram-facebook-requirements');
+
+    $page->assertNoJavaScriptErrors();
+    expect($post->fresh()->status)->toBe(Status::PendingApproval);
+});
+
+test('save and link asks an approver to decide on a pending reel first', function () {
+    fakeChannelSettingsApis();
+    $video = [['id' => (string) Str::uuid(), 'type' => 'video', 'path' => 'medias/clip.mp4', 'url' => 'https://example.com/clip.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'clip.mp4']];
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel, $video);
+    $post->update(['status' => Status::PendingApproval, 'scheduled_at' => now()->addDay()]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-save-and-link');
+    $page->click('@instagram-music-save-and-link');
+    waitFor($page, '@instagram-music-save-and-link-pending');
+
+    $page->assertSee(__('posts.form.instagram.music.save_and_link_pending'))
+        ->assertVisible('@post-composer-dialog')
+        ->assertNoJavaScriptErrors();
+    expect($post->fresh()->status)->toBe(Status::PendingApproval);
+});
+
+test('save and link saves a draft reel as a draft before linking Facebook', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-save-and-link');
+    $page->click('@instagram-music-save-and-link');
+    waitFor($page, '@instagram-facebook-requirements');
+
+    $page->assertMissing('@post-composer-dialog')->assertNoJavaScriptErrors();
+    expect($post->fresh()->status)->toBe(Status::Draft);
+});
+
+test('an invalid collaborator in any position shows its error', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-collaborator-input');
+
+    $page->type('@instagram-collaborator-input', 'good_user')
+        ->keys('@instagram-collaborator-input', 'Enter');
+    waitFor($page, '@instagram-collaborators-notice');
+    $page->click('@instagram-collaborators-notice-dismiss')
+        ->type('@instagram-collaborator-input', 'bad-name!')
+        ->click('@instagram-collaborator-add');
+    waitFor($page, '[data-testid="instagram-collaborator-bad-name!"]');
+
+    $page->click('@composer-save-draft');
+    waitForText($page, '@channel-settings-row:has(@instagram-collaborators)', __('posts.form.instagram.collaborators.invalid'));
+
+    $page->assertSee(__('posts.form.instagram.collaborators.invalid'))->assertNoJavaScriptErrors();
+    expect(data_get($post->fresh()->meta, 'collaborators'))->toBeNull();
+});
+
+test('a picked track whose cover link expired gets a fresh cover from instagram', function () {
+    $freshCover = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    Http::fake([config('trypost.platforms.instagram-facebook.graph_api').'/846373660299207*' => Http::response([
+        'audio_id' => '846373660299207',
+        'title' => 'Summer Song',
+        'audio_type' => 'music',
+        'cover_artwork_thumbnail_url' => $freshCover,
+    ])]);
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel);
+    $post->update(['meta' => ['audio' => [
+        'id' => '846373660299207',
+        'title' => 'Summer Song',
+        'cover_url' => 'http://127.0.0.1:9/expired-cover.jpg',
+        'preview_url' => null,
+    ]]]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-selected');
+    waitForState($page, '@instagram-music-selected-cover', "element.getAttribute('src')?.startsWith('data:image/gif')");
+
+    expect($page->script("document.querySelector('[data-testid=\"instagram-music-selected-cover\"]')?.getAttribute('src')"))->toBe($freshCover);
+    $page->assertNoJavaScriptErrors();
+});
+
+test('a picked track whose cover cannot be refreshed shows the music icon instead', function () {
+    Http::fake([config('trypost.platforms.instagram-facebook.graph_api').'/846373660299207*' => Http::response(['error' => ['code' => 100]], 400)]);
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel);
+    $post->update(['meta' => ['audio' => [
+        'id' => '846373660299207',
+        'title' => 'Summer Song',
+        'cover_url' => 'http://127.0.0.1:9/expired-cover.jpg',
+        'preview_url' => null,
+    ]]]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-selected');
+    waitForGone($page, '@instagram-music-selected-cover');
+
+    $page->assertMissing('@instagram-music-selected-cover')
+        ->assertSeeIn('@instagram-music-selected', 'Summer Song');
+});
+
+test('the instagram reel card picks music for an account connected through Facebook', function () {
+    Http::fake([config('trypost.platforms.instagram-facebook.graph_api').'/ig_audio*' => Http::response(['audio' => [[
+        'audio_id' => '1234567890',
+        'title' => 'Summer Song',
+        'display_artist' => 'The Band',
+        'cover_artwork_thumbnail_uri' => null,
+        'download_url' => null,
+    ]]])]);
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+    $page->script(<<<'JS'
+        (() => {
+            window.__trackLookups = 0;
+            const open = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+                if (/\/instagram\/accounts\/[^/]+\/audio\/\d+/.test(String(url))) window.__trackLookups++;
+                return open.call(this, method, url, ...rest);
+            };
+        })()
+    JS);
+
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-track-1234567890');
+    $page->click('@instagram-music-track-1234567890');
+    waitFor($page, '@instagram-music-selected');
+    $page->assertSeeIn('@instagram-music-selected', 'Summer Song')
+        ->assertSeeIn('@instagram-preview-audio', 'Summer Song')
+        ->assertPresent('@instagram-music-part-hint')
+        ->assertNoJavaScriptErrors();
+
+    $page->click('@instagram-music-volume');
+    waitFor($page, '@instagram-music-video_volume');
+    $page->script(<<<'JS'
+        (() => {
+            const slider = document.querySelector('[data-testid="instagram-music-video_volume"]');
+            slider.value = '30';
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+        })()
+    JS);
+    waitForText($page, '@instagram-music-volume-panel', '30%');
+    $page->assertSeeIn('@instagram-music-volume-panel', '30%')
+        ->keys('@instagram-music-video_volume', 'Escape');
+    waitForGone($page, '@instagram-music-volume-panel');
+
+    $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
+
+    expect(data_get($post->fresh()->meta, 'audio'))->toEqual([
+        'id' => '1234567890',
+        'title' => 'Summer Song',
+        'artist' => 'The Band',
+        'cover_url' => null,
+        'preview_url' => null,
+        'video_volume' => 30,
+    ])->and($page->script('window.__trackLookups'))->toBe(0);
+});
+
 test('the instagram card counts hashtags down to five and warns past the limit', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramFeed);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramFeed);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, "composer-hashtags-remaining-{$id}");
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, "@composer-hashtags-remaining-{$id}");
 
     expect($page->script(<<<JS
         (() => {
@@ -568,12 +837,12 @@ test('the instagram card counts hashtags down to five and warns past the limit',
         ->assertSeeIn("@composer-hashtags-remaining-{$id}", '2')
         ->assertMissing("@composer-hashtag-warning-{$id}")
         ->fill("@composer-caption-{$id}", 'Launch #a #b #c #d #e #f');
-    waitForChannelSettingsTestId($page, "composer-hashtag-warning-{$id}");
+    waitFor($page, "@composer-hashtag-warning-{$id}");
 
     $page->assertMissing("@composer-hashtags-remaining-{$id}")
         ->assertSeeIn("@composer-hashtag-warning-{$id}", 'Instagram only allows 5 hashtags per post.')
         ->fill("@composer-caption-{$id}", 'Launch #a #b #c #d #e');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"composer-hashtag-warning-{$id}\"]')");
+    waitForGone($page, "@composer-hashtag-warning-{$id}");
 
     $page->assertSeeIn("@composer-hashtags-remaining-{$id}", '0')
         ->assertNoJavaScriptErrors();
@@ -581,12 +850,12 @@ test('the instagram card counts hashtags down to five and warns past the limit',
 
 test('the mastodon content warning counts against the post', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Mastodon, ContentType::MastodonPost);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Mastodon, ContentType::MastodonPost);
+    $id = $post->social_account_id;
     $limit = Platform::Mastodon->maxContentLength();
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'mastodon-content-warning');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@mastodon-content-warning');
 
     $page->assertSeeIn("@composer-char-count-{$id}", (string) ($limit - mb_strlen('Channel settings')))
         ->fill('@mastodon-content-warning', 'Spoilers')
@@ -595,36 +864,36 @@ test('the mastodon content warning counts against the post', function () {
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta)->toEqual(['spoiler_text' => 'Spoilers']);
+    expect($post->fresh()->meta)->toEqual(['spoiler_text' => 'Spoilers']);
 });
 
 test('the threads card offers a topic and a ghost post drops the topic and the media tray', function () {
     fakeChannelSettingsApis();
     config(['services.unsplash.access_key' => 'test-unsplash-key']);
-    $postPlatform = seedChannelSettingsPost(Platform::Threads, ContentType::ThreadsPost);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Threads, ContentType::ThreadsPost);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'threads-topic-tag');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@threads-topic-tag');
 
     $page->fill('@threads-topic-tag', '#laravel')
         ->assertPresent("@composer-{$id}-dropzone")
         ->click("@composer-type-{$id}-threads_ghost_post");
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"threads-topic-tag\"]')");
+    waitForGone($page, '@threads-topic-tag');
     $page->assertMissing("@composer-{$id}-dropzone")
         ->assertMissing("@composer-{$id}-media-source-menu")
         ->assertVisible("@composer-{$id}-media-source-disabled")
         ->hover("@composer-{$id}-media-source-disabled");
-    waitForChannelSettingsCondition($page, 'document.body.innerText.includes('.json_encode(__('posts.composer.media_not_supported')).')');
+    waitForText($page, '[data-slot="tooltip-content"]', __('posts.composer.media_not_supported'));
     $page->click("@composer-type-{$id}-threads_post");
-    waitForChannelSettingsTestId($page, 'threads-topic-tag');
+    waitFor($page, '@threads-topic-tag');
     $page->assertVisible("@composer-{$id}-media-source-menu")
         ->assertMissing("@composer-{$id}-media-source-disabled")
         ->assertNoJavaScriptErrors();
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta)->toEqual(['topic_tag' => 'laravel']);
+    expect($post->fresh()->meta)->toEqual(['topic_tag' => 'laravel']);
 });
 
 test('a threads card with a link card can switch to a ghost post, which keeps the link and drops the card', function () {
@@ -633,68 +902,68 @@ test('a threads card with a link card can switch to a ghost post, which keeps th
         $url => Http::response('<meta property="og:title" content="Article card">'),
         '*' => Http::response([], 200),
     ]);
-    $postPlatform = seedChannelSettingsPost(Platform::Threads, ContentType::ThreadsPost);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Threads, ContentType::ThreadsPost);
+    $id = $post->social_account_id;
     $ghost = "composer-type-{$id}-threads_ghost_post";
-    $postPlatform->post->update(['content' => "Read {$url}"]);
+    $post->update(['content' => "Read {$url}"]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, "composer-link-card-{$id}");
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, "@composer-link-card-{$id}");
 
     expect($page->script("document.querySelector('[data-testid=\"{$ghost}\"]').disabled"))->toBeFalse();
 
     $page->click("@{$ghost}");
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"composer-link-card-{$id}\"]')");
+    waitForGone($page, "@composer-link-card-{$id}");
     $page->assertMissing("@composer-text-only-warning-{$id}")
         ->assertNoJavaScriptErrors();
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->content_type)->toBe(ContentType::ThreadsGhostPost);
+    expect($post->fresh()->content_type)->toBe(ContentType::ThreadsGhostPost);
 });
 
 test('a bluesky thread starts from the toolbar and stacks its replies under the post', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Bluesky, ContentType::BlueskyPost);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Bluesky, ContentType::BlueskyPost);
+    $id = $post->social_account_id;
     $limit = Platform::Bluesky->maxContentLength();
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'thread-start');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@thread-start');
 
     expect($page->script("!!document.querySelector('[data-testid=\"composer-{$id}-toolbar\"] [data-testid=\"thread-start\"]')"))->toBeTrue();
 
     $page->click('@thread-start');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
     $page->assertVisible("@composer-{$id}-caption-collapsed")
         ->fill('@thread-reply-0', 'Second post')
         ->assertSeeIn("@composer-char-count-{$id}", (string) ($limit - mb_strlen('Second post')))
         ->click('@thread-add-reply');
-    waitForChannelSettingsTestId($page, 'thread-reply-1');
+    waitFor($page, '@thread-reply-1');
     $page->fill('@thread-reply-1', 'Third post')
         ->assertVisible('@thread-reply-collapsed-0')
         ->assertSeeIn('@preview-thread-reply-1', 'Third post')
         ->click('@thread-reply-remove-0');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"thread-reply-1\"], [data-testid=\"thread-reply-collapsed-1\"]')");
+    waitForGone($page, '@thread-reply-1, @thread-reply-collapsed-1');
     $page->click("@composer-{$id}-caption-collapsed");
-    waitForChannelSettingsTestId($page, "composer-caption-{$id}");
+    waitFor($page, "@composer-caption-{$id}");
     $page->assertNoJavaScriptErrors();
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta)->toEqual(['thread_replies' => [['text' => 'Third post', 'media' => []]]]);
+    expect($post->fresh()->meta)->toEqual(['thread_replies' => [['text' => 'Third post', 'media' => []]]]);
 });
 
 test('a thread reply of invisible characters is empty like on the server', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Bluesky, ContentType::BlueskyPost);
+    $post = seedChannelSettingsPost(Platform::Bluesky, ContentType::BlueskyPost);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'thread-start');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@thread-start');
     $page->click('@thread-start');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
     $page->fill('@thread-reply-0', "\u{200B}\u{00A0}");
-    waitForChannelSettingsCondition($page, "document.querySelector('[data-testid=\"composer-submit\"]')?.getAttribute('aria-disabled') === 'true'");
+    waitForState($page, '@composer-submit', "element.getAttribute('aria-disabled') === 'true'");
 
     expect($page->script('document.querySelector(\'[data-testid="composer-submit"]\').getAttribute(\'aria-disabled\')'))->toBe('true');
     $page->assertNoJavaScriptErrors();
@@ -709,16 +978,16 @@ test('a server error on a thread reply shows under that reply', function () {
             return $content === 'Too long for the server' ? str_repeat('a', 400) : parent::displayText($content, $platform);
         }
     });
-    $postPlatform = seedChannelSettingsPost(Platform::Bluesky, ContentType::BlueskyPost);
+    $post = seedChannelSettingsPost(Platform::Bluesky, ContentType::BlueskyPost);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'thread-start');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@thread-start');
     $page->click('@thread-start');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
     $page->fill('@thread-reply-0', 'Fine')->click('@thread-add-reply');
-    waitForChannelSettingsTestId($page, 'thread-reply-1');
+    waitFor($page, '@thread-reply-1');
     $page->fill('@thread-reply-1', 'Too long for the server')->click('@composer-submit');
-    waitForChannelSettingsTestId($page, 'thread-reply-error-1');
+    waitFor($page, '@thread-reply-error-1');
 
     $page->assertSeeIn('@thread-reply-error-1', __('posts.form.thread.reply_too_long', ['limit' => 300, 'over' => 100]))
         ->assertMissing('@thread-reply-error-0')
@@ -727,13 +996,13 @@ test('a server error on a thread reply shows under that reply', function () {
 
 test('a thread reply shows its own media under it and keeps it on save', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::X, ContentType::XPost);
-    $id = $postPlatform->social_account_id;
-    $image = Media::factory()->ownedByPost($postPlatform->post)->create(['mime_type' => 'image/png']);
-    $postPlatform->update(['meta' => ['thread_replies' => [['text' => 'With a photo', 'media' => [MediaItem::fromMedia($image)->toArray()]], 'Plain reply']]]);
+    $post = seedChannelSettingsPost(Platform::X, ContentType::XPost);
+    $id = $post->social_account_id;
+    $image = Media::factory()->ownedByPost($post)->create(['mime_type' => 'image/png']);
+    $post->update(['meta' => ['thread_replies' => [['text' => 'With a photo', 'media' => [MediaItem::fromMedia($image)->toArray()]], 'Plain reply']]]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, "composer-{$id}-reply-0-media-item-0");
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, "@composer-{$id}-reply-0-media-item-0");
 
     $page->assertMissing("@composer-{$id}-media-item-0")
         ->assertMissing("@composer-{$id}-reply-0-dropzone")
@@ -742,7 +1011,7 @@ test('a thread reply shows its own media under it and keeps it on save', functio
         ->assertPresent("@composer-{$id}-media-source-menu")
         ->assertNotPresent("@composer-{$id}-add-media")
         ->click('@thread-reply-collapsed-0');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
     $page->assertPresent("@composer-{$id}-reply-0-media-item-0")
         ->assertPresent("@composer-{$id}-reply-0-dropzone")
         ->assertMissing("@composer-{$id}-dropzone");
@@ -755,21 +1024,21 @@ test('a thread reply shows its own media under it and keeps it on save', functio
         ->click('@composer-save-draft')
         ->assertMissing('@post-composer-dialog');
 
-    $replies = $postPlatform->fresh()->meta['thread_replies'];
+    $replies = $post->fresh()->meta['thread_replies'];
 
     expect($replies[0]['text'])->toBe('Still with a photo')
         ->and($replies[0]['media'][0]['id'])->toBe($image->id)
         ->and($replies[1])->toEqual(['text' => 'Plain reply', 'media' => []])
-        ->and($postPlatform->post->fresh()->media)->toBe([]);
+        ->and($post->fresh()->media)->toBe([]);
 });
 
 test('the mastodon preview hides the post behind its content warning on every post of the thread', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Mastodon, ContentType::MastodonPost);
-    $postPlatform->update(['meta' => ['spoiler_text' => 'Spoilers', 'thread_replies' => ['Hidden reply']]]);
+    $post = seedChannelSettingsPost(Platform::Mastodon, ContentType::MastodonPost);
+    $post->update(['meta' => ['spoiler_text' => 'Spoilers', 'thread_replies' => ['Hidden reply']]]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'mastodon-preview-content-warning');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@mastodon-preview-content-warning');
 
     expect($page->script("[...document.querySelectorAll('[data-testid=\"preview-thread\"] [data-testid=\"mastodon-preview-content-warning\"]')].map((warning) => warning.innerText.replace(/\\s+/g, ' ').trim())"))
         ->toBe(array_fill(0, 2, 'Spoilers '.__('posts.composer.preview.tap_to_reveal')));
@@ -781,24 +1050,24 @@ test('the mastodon preview hides the post behind its content warning on every po
 
 test('an x thread starts from the toolbar and counts each reply against the account limit', function (array $accountMeta, int $limit) {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::X, ContentType::XPost);
-    $postPlatform->socialAccount->update(['meta' => [...(array) $postPlatform->socialAccount->meta, ...$accountMeta]]);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::X, ContentType::XPost);
+    $post->socialAccount->update(['meta' => [...(array) $post->socialAccount->meta, ...$accountMeta]]);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'thread-start');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@thread-start');
 
     $page->click('@thread-start');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
     $page->fill('@thread-reply-0', 'Second tweet')
         ->assertSeeIn("@composer-char-count-{$id}", (string) ($limit - mb_strlen('Second tweet')));
-    waitForChannelSettingsTestId($page, 'preview-thread-reply-0');
+    waitFor($page, '@preview-thread-reply-0');
     $page->assertSeeIn('@preview-thread-reply-0', 'Second tweet')
         ->assertNoJavaScriptErrors();
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta)->toEqual(['thread_replies' => [['text' => 'Second tweet', 'media' => []]]]);
+    expect($post->fresh()->meta)->toEqual(['thread_replies' => [['text' => 'Second tweet', 'media' => []]]]);
 })->with([
     'standard account' => [[], 280],
     'premium account' => [['x_subscription_type' => 'Premium'], 25000],
@@ -806,10 +1075,10 @@ test('an x thread starts from the toolbar and counts each reply against the acco
 
 test('the x card offers the ai-generated switch with its explanation and saves it', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::X, ContentType::XPost);
+    $post = seedChannelSettingsPost(Platform::X, ContentType::XPost);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'x-ai-generated');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@x-ai-generated');
 
     $page->assertVisible('@x-ai-generated-info')
         ->click('@x-ai-generated')
@@ -817,34 +1086,34 @@ test('the x card offers the ai-generated switch with its explanation and saves i
 
     $page->click('@composer-save-draft')->assertMissing('@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta)->toEqual(['is_ai_generated' => true]);
+    expect($post->fresh()->meta)->toEqual(['is_ai_generated' => true]);
 });
 
 test('shift enter opens the next post of an x thread and backspace on an empty post folds it back', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::X, ContentType::XPost);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::X, ContentType::XPost);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, "composer-caption-{$id}");
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, "@composer-caption-{$id}");
 
     $page->keys("@composer-caption-{$id}", 'Shift+Enter');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
     $page->fill('@thread-reply-0', 'Second tweet')
         ->keys('@thread-reply-0', 'Shift+Enter');
-    waitForChannelSettingsTestId($page, 'thread-reply-1');
+    waitFor($page, '@thread-reply-1');
 
     expect($page->script('document.activeElement?.dataset.testid'))->toBe('thread-reply-1');
 
     $page->keys('@thread-reply-1', 'Backspace');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
 
     expect($page->script("document.querySelectorAll('[data-testid^=\"thread-reply-collapsed-\"], [data-testid^=\"thread-reply-\"]:not([data-testid*=\"remove\"]):not([data-testid*=\"error\"]):not([data-testid*=\"collapsed\"])').length"))->toBe(1)
         ->and($page->script('document.activeElement?.dataset.testid'))->toBe('thread-reply-0');
 
     $page->fill('@thread-reply-0', '')
         ->keys('@thread-reply-0', 'Backspace');
-    waitForChannelSettingsTestId($page, "composer-caption-{$id}");
+    waitFor($page, "@composer-caption-{$id}");
 
     expect($page->script('document.activeElement?.dataset.testid'))->toBe("composer-caption-{$id}");
     $page->assertMissing('@thread-reply-0')
@@ -854,34 +1123,34 @@ test('shift enter opens the next post of an x thread and backspace on an empty p
 
 test('arrow keys move between the posts of a thread from the end and the start of each one', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::X, ContentType::XPost);
-    $postPlatform->post->update(['content' => 'Root']);
-    $postPlatform->update(['meta' => ['thread_replies' => ['First reply', 'Second reply']]]);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::X, ContentType::XPost);
+    $post->update(['content' => 'Root']);
+    $post->update(['meta' => ['thread_replies' => ['First reply', 'Second reply']]]);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, "composer-caption-{$id}");
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, "@composer-caption-{$id}");
 
     $page->script("(() => { const c = document.querySelector('[data-testid=\"composer-caption-{$id}\"]'); c.focus(); c.setSelectionRange(c.value.length, c.value.length); })()");
     $page->keys("@composer-caption-{$id}", 'ArrowDown');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
 
     expect($page->script('[document.activeElement?.dataset.testid, document.activeElement?.selectionStart]'))->toBe(['thread-reply-0', 0]);
 
     $page->script("(() => { const r = document.querySelector('[data-testid=\"thread-reply-0\"]'); r.setSelectionRange(r.value.length, r.value.length); })()");
     $page->keys('@thread-reply-0', 'ArrowDown');
-    waitForChannelSettingsTestId($page, 'thread-reply-1');
+    waitFor($page, '@thread-reply-1');
 
     expect($page->script('document.activeElement?.dataset.testid'))->toBe('thread-reply-1');
 
     $page->keys('@thread-reply-1', 'ArrowUp');
-    waitForChannelSettingsTestId($page, 'thread-reply-0');
+    waitFor($page, '@thread-reply-0');
 
     expect($page->script('[document.activeElement?.dataset.testid, document.activeElement?.selectionStart === document.activeElement?.value.length]'))->toBe(['thread-reply-0', true]);
 
     $page->script("document.querySelector('[data-testid=\"thread-reply-0\"]').setSelectionRange(0, 0)");
     $page->keys('@thread-reply-0', 'ArrowUp');
-    waitForChannelSettingsTestId($page, "composer-caption-{$id}");
+    waitFor($page, "@composer-caption-{$id}");
 
     expect($page->script('document.activeElement?.dataset.testid'))->toBe("composer-caption-{$id}");
     $page->assertNoJavaScriptErrors();
@@ -889,47 +1158,42 @@ test('arrow keys move between the posts of a thread from the end and the start o
 
 test('the preview scrolls to the thread post being edited', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::X, ContentType::XPost);
-    $postPlatform->post->update(['content' => str_repeat('Root post text. ', 40)]);
-    $postPlatform->update(['meta' => ['thread_replies' => [str_repeat('First reply text. ', 40), str_repeat('Second reply text. ', 40), 'Last reply']]]);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::X, ContentType::XPost);
+    $post->update(['content' => str_repeat('Root post text. ', 40)]);
+    $post->update(['meta' => ['thread_replies' => [str_repeat('First reply text. ', 40), str_repeat('Second reply text. ', 40), 'Last reply']]]);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 700);
-    waitForChannelSettingsTestId($page, 'thread-reply-collapsed-2');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 700);
+    waitFor($page, '@thread-reply-collapsed-2');
 
     $page->click('@thread-reply-collapsed-2');
-    waitForChannelSettingsCondition($page, <<<'JS'
-        (() => {
-            const reply = document.querySelector('[data-testid="preview-thread-reply-2"]').getBoundingClientRect();
-            return reply.top >= 0 && reply.bottom <= window.innerHeight;
-        })()
-    JS);
+    waitForState($page, '@preview-thread-reply-2', 'element.getBoundingClientRect().top >= 0 && element.getBoundingClientRect().bottom <= window.innerHeight');
 
     $page->assertNoJavaScriptErrors();
 });
 
 test('editing a scheduled post offers to move it back to drafts', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::X, ContentType::XPost);
-    $postPlatform->post->update(['content' => 'Scheduled post', 'status' => Status::Scheduled, 'scheduled_at' => now()->addDays(2)]);
+    $post = seedChannelSettingsPost(Platform::X, ContentType::XPost);
+    $post->update(['content' => 'Scheduled post', 'status' => Status::Scheduled, 'scheduled_at' => now()->addDays(2)]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, 'composer-save-draft');
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, '@composer-save-draft');
 
     $page->assertSeeIn('@composer-save-draft', __('posts.publish.actions.move_to_drafts'))
         ->click('@composer-save-draft');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"composer-save-draft\"]')");
+    waitForGone($page, '@composer-save-draft');
 
-    expect($postPlatform->post->fresh()->status)->toBe(Status::Draft);
+    expect($post->fresh()->status)->toBe(Status::Draft);
     $page->assertNoJavaScriptErrors();
 });
 
 test('the google business preview shows no verified badge', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
+    $post = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, 'google-business-preview');
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, '@google-business-preview');
 
     expect($page->script("document.querySelector('[data-testid=\"google-business-preview\"] .text-info.rounded-full, [data-testid=\"google-business-preview\"] [data-testid=\"preview-verified\"]') === null"))->toBeTrue();
     $page->assertNoJavaScriptErrors();
@@ -938,16 +1202,16 @@ test('the google business preview shows no verified badge', function () {
 test('a youtube video with neither text nor a title warns in its card until a title is set', function () {
     fakeChannelSettingsApis();
     $video = [['id' => (string) Str::uuid(), 'type' => 'video', 'path' => 'medias/clip.mp4', 'url' => 'https://example.com/clip.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'clip.mp4']];
-    $postPlatform = seedChannelSettingsPost(Platform::YouTube, ContentType::YouTubeShort, $video);
-    $postPlatform->post->update(['content' => '']);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::YouTube, ContentType::YouTubeShort, $video);
+    $post->update(['content' => '']);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, "composer-meta-warning-{$id}");
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, "@composer-meta-warning-{$id}");
 
     $page->assertSeeIn("@composer-meta-warning-{$id}", __('posts.form.youtube.title_required'))
         ->fill('@youtube-title', 'My short');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"composer-meta-warning-{$id}\"]')");
+    waitForGone($page, "@composer-meta-warning-{$id}");
 
     $page->assertMissing("@composer-meta-warning-{$id}")
         ->assertNoJavaScriptErrors();
@@ -955,10 +1219,10 @@ test('a youtube video with neither text nor a title warns in its card until a ti
 
 test('the tiktok interactions read as full sentences and the compliance text lines up with the fields', function () {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo);
+    $post = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'tiktok-privacy-level');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@tiktok-privacy-level');
 
     $page->assertMissing('@tiktok-posting-to')
         ->assertVisible('@tiktok-disclose')
@@ -981,11 +1245,11 @@ test('the tiktok interactions read as full sentences and the compliance text lin
 test('tiktok has no post type choice: photos make a photo post and a video a video post', function () {
     fakeChannelSettingsApis();
     $photos = collect(range(1, 2))->map(fn (int $index): array => ['id' => (string) Str::uuid(), 'type' => 'image', 'path' => "medias/photo-{$index}.jpg", 'url' => "https://example.com/photo-{$index}.jpg", 'mime_type' => 'image/jpeg', 'original_filename' => "photo-{$index}.jpg"])->all();
-    $postPlatform = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo, $photos);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo, $photos);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, 'tiktok-privacy-level');
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, '@tiktok-privacy-level');
 
     $page->assertMissing("@composer-type-{$id}-tiktok_video")
         ->assertMissing("@composer-type-{$id}-tiktok_photo")
@@ -994,11 +1258,11 @@ test('tiktok has no post type choice: photos make a photo post and a video a vid
     $page->assertVisible('@tiktok-auto-add-music')
         ->assertAttribute('@tiktok-auto-add-music', 'data-state', 'unchecked')
         ->click('@tiktok-auto-add-music');
-    waitForChannelSettingsCondition($page, "document.querySelector('[data-testid=\"tiktok-auto-add-music\"]')?.dataset.state === 'checked'");
+    waitForState($page, '@tiktok-auto-add-music', "element.dataset.state === 'checked'");
     $page->click('@composer-save-draft');
-    waitForChannelSettingsCondition($page, "!document.querySelector('[data-testid=\"post-composer-dialog\"]')");
+    waitForGone($page, '@post-composer-dialog');
 
-    expect($postPlatform->fresh()->meta['auto_add_music'] ?? null)->toBeTrue();
+    expect($post->fresh()->meta['auto_add_music'] ?? null)->toBeTrue();
     $page->assertNoJavaScriptErrors();
 });
 
@@ -1007,11 +1271,11 @@ test('tiktok takes photos or a single video, never both, and says so in its card
     $media = collect($kinds)->map(fn (string $kind, int $index): array => $kind === 'image'
         ? ['id' => (string) Str::uuid(), 'type' => 'image', 'path' => "medias/photo-{$index}.jpg", 'url' => "https://example.com/photo-{$index}.jpg", 'mime_type' => 'image/jpeg', 'original_filename' => "photo-{$index}.jpg"]
         : ['id' => (string) Str::uuid(), 'type' => 'video', 'path' => "medias/clip-{$index}.mp4", 'url' => "https://example.com/clip-{$index}.mp4", 'mime_type' => 'video/mp4', 'original_filename' => "clip-{$index}.mp4"])->all();
-    $postPlatform = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo, $media);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokVideo, $media);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, "composer-media-warning-{$id}");
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, "@composer-media-warning-{$id}");
 
     $page->assertSeeIn("@composer-media-warning-{$id}", __("posts.form.warnings.{$warning}", $params))
         ->assertNoJavaScriptErrors();
@@ -1023,11 +1287,11 @@ test('tiktok takes photos or a single video, never both, and says so in its card
 test('every action on a media tile shows its name in a tooltip', function () {
     fakeChannelSettingsApis();
     $media = collect(range(1, 2))->map(fn (int $index): array => ['id' => (string) Str::uuid(), 'type' => 'image', 'path' => "medias/photo-{$index}.jpg", 'url' => "https://example.com/photo-{$index}.jpg", 'mime_type' => 'image/jpeg', 'original_filename' => "photo-{$index}.jpg"])->all();
-    $postPlatform = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramFeed, $media);
-    $id = $postPlatform->social_account_id;
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramFeed, $media);
+    $id = $post->social_account_id;
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, "composer-{$id}-media-item-1");
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, "@composer-{$id}-media-item-1");
 
     foreach ([
         "composer-{$id}-drag-handle-0" => 'reorder',
@@ -1037,9 +1301,9 @@ test('every action on a media tile shows its name in a tooltip', function () {
         "composer-{$id}-edit-0" => 'edit',
     ] as $testId => $key) {
         $page->hover('@composer-save-draft');
-        waitForChannelSettingsCondition($page, "!document.querySelector('[data-slot=\"tooltip-content\"]')");
+        waitForGone($page, '[data-slot="tooltip-content"]');
         $page->hover("@composer-{$id}-media-item-0")->hover("@{$testId}");
-        waitForChannelSettingsCondition($page, "[...document.querySelectorAll('[data-slot=\"tooltip-content\"]')].some((tip) => tip.textContent.includes(".json_encode(__("posts.composer.media_actions.{$key}")).'))');
+        waitForText($page, '[data-slot="tooltip-content"]', __("posts.composer.media_actions.{$key}"));
 
         expect($page->script("[...document.querySelectorAll('[data-slot=\"tooltip-content\"]')].map((tip) => tip.textContent.trim()).join('|')"))
             ->toContain(__("posts.composer.media_actions.{$key}"));
@@ -1051,10 +1315,10 @@ test('every action on a media tile shows its name in a tooltip', function () {
 test('the tiktok preview shows a photo on black, with no blurred fill around it', function () {
     fakeChannelSettingsApis();
     $photo = [['id' => (string) Str::uuid(), 'type' => 'image', 'path' => 'medias/photo.jpg', 'url' => 'https://example.com/photo.jpg', 'mime_type' => 'image/jpeg', 'original_filename' => 'photo.jpg']];
-    $postPlatform = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokPhoto, $photo);
+    $post = seedChannelSettingsPost(Platform::TikTok, ContentType::TikTokPhoto, $photo);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, 'tiktok-preview');
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, '@tiktok-preview');
 
     expect($page->script("document.querySelectorAll('[data-testid=\"tiktok-preview\"] img[aria-hidden=\"true\"]').length"))->toBe(0)
         ->and($page->script("document.querySelectorAll('[data-testid=\"tiktok-preview\"] img').length"))->toBeGreaterThan(0);
@@ -1063,17 +1327,17 @@ test('the tiktok preview shows a photo on black, with no blurred fill around it'
 
 test('the google business event times follow the user clock and pick from a list', function (TimeFormat $format, string $typed, string $shown, string $typedShown) {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
+    $post = seedChannelSettingsPost(Platform::GoogleBusiness, ContentType::GoogleBusinessPost);
     auth()->user()->update(['time_format' => $format]);
-    $postPlatform->update(['meta' => ['topic_type' => 'EVENT', 'event' => ['title' => 'Launch night', 'start_date' => '2037-03-10', 'end_date' => '2037-03-12', 'start_time' => '09:00']]]);
+    $post->update(['meta' => ['topic_type' => 'EVENT', 'event' => ['title' => 'Launch night', 'start_date' => channelSettingsEventDay(0), 'end_date' => channelSettingsEventDay(2), 'start_time' => '09:00']]]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1280, 900);
-    waitForChannelSettingsTestId($page, 'google-business-start-time');
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@google-business-start-time');
 
     expect($page->script("document.querySelector('[data-testid=\"google-business-start-time\"]').type"))->toBe('text');
 
     $page->click('@google-business-start-time');
-    waitForChannelSettingsTestId($page, 'time-field-option-0900');
+    waitFor($page, '@time-field-option-0900');
     expect($page->script("document.querySelector('[data-testid=\"time-field-option-1830\"]').textContent.trim()"))->toBe($shown);
     $page->assertAttribute('@time-field-option-0900', 'aria-selected', 'true')
         ->click('@time-field-option-1830');
@@ -1089,20 +1353,20 @@ test('the google business event times follow the user clock and pick from a list
         ->click('@composer-save-draft')
         ->assertMissing('@post-composer-dialog');
 
-    expect(data_get($postPlatform->fresh()->meta, 'event.start_time'))->toBe('18:30')
-        ->and(data_get($postPlatform->fresh()->meta, 'event.end_time'))->toBe('21:00');
+    expect(data_get($post->fresh()->meta, 'event.start_time'))->toBe('18:30')
+        ->and(data_get($post->fresh()->meta, 'event.end_time'))->toBe('21:00');
 })->with([
     '12h' => [TimeFormat::TwelveHour, '9 pm', '6:30 PM', '9:00 PM'],
 ]);
 
 test('the facebook preview lays several photos out as the feed collage, not stacked', function (int $count, array $spans, ?string $more) {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost(Platform::Facebook, ContentType::FacebookPost);
-    $images = Media::factory()->count($count)->temporaryUpload($postPlatform->post->workspace)->create(['mime_type' => 'image/png']);
-    $postPlatform->post->update(['media' => $images->map(fn (Media $media): array => MediaItem::fromMedia($media)->toArray())->all()]);
+    $post = seedChannelSettingsPost(Platform::Facebook, ContentType::FacebookPost);
+    $images = Media::factory()->count($count)->temporaryUpload($post->workspace)->create(['mime_type' => 'image/png']);
+    $post->update(['media' => $images->map(fn (Media $media): array => MediaItem::fromMedia($media)->toArray())->all()]);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, 'preview-media-collage');
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, '@preview-media-collage');
 
     $layout = $page->script(<<<'JS'
         (() => {
@@ -1124,11 +1388,11 @@ test('the facebook preview lays several photos out as the feed collage, not stac
 
 test('every character counter in the composer shares one design', function (Platform $platform, ContentType $contentType, string $counter) {
     fakeChannelSettingsApis();
-    $postPlatform = seedChannelSettingsPost($platform, $contentType);
-    $testId = str_replace('{id}', $postPlatform->social_account_id, $counter);
+    $post = seedChannelSettingsPost($platform, $contentType);
+    $testId = str_replace('{id}', $post->social_account_id, $counter);
 
-    $page = visit(route('app.posts.edit', $postPlatform->post))->resize(1440, 1000);
-    waitForChannelSettingsTestId($page, $testId);
+    $page = visit(route('app.posts.edit', $post))->resize(1440, 1000);
+    waitFor($page, "@{$testId}");
 
     $look = $page->script(<<<JS
         new Promise((resolve) => {
@@ -1164,3 +1428,224 @@ test('every character counter in the composer shares one design', function (Plat
 })->with([
     'characters left' => [Platform::X, ContentType::XPost, 'composer-char-count-{id}'],
 ]);
+
+test('a failed instagram music search says so and lets the picker close', function () {
+    Http::fake([config('trypost.platforms.instagram-facebook.graph_api').'/ig_audio*' => Http::response(['error' => ['code' => 2]], 500)]);
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-failed');
+
+    $page->assertSeeIn('@instagram-music-failed', __('posts.form.instagram.music.search_failed'))
+        ->keys('@instagram-music-search', 'Escape');
+    waitForGone($page, '@instagram-music-picker');
+
+    $page->assertNoJavaScriptErrors();
+});
+
+test('searching instagram music asks instagram once the typing stops', function () {
+    $graph = config('trypost.platforms.instagram-facebook.graph_api');
+    Http::fake(["{$graph}/ig_audio*" => fn (Request $request) => Http::response(['audio' => str_contains($request->url(), 'search_query=grudge')
+        ? [['audio_id' => 'audio-grudge', 'title' => 'Grudge', 'display_artist' => 'Tash']]
+        : [['audio_id' => 'audio-trending', 'title' => 'Trending', 'display_artist' => 'Band']]])]);
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-add');
+    $page->click('@instagram-music-add');
+    waitFor($page, '@instagram-music-track-audio-trending');
+
+    $page->type('@instagram-music-search', 'grudge');
+    waitFor($page, '@instagram-music-track-audio-grudge');
+
+    $page->assertMissing('@instagram-music-track-audio-trending')->assertNoJavaScriptErrors();
+    $musicSearches = collect(Http::recorded())
+        ->map(fn (array $pair): string => $pair[0]->url())
+        ->filter(fn (string $url): bool => str_contains($url, 'audio_type=music') && str_contains($url, 'search_query='))
+        ->values();
+
+    expect($musicSearches)->toHaveCount(1)
+        ->and($musicSearches->first())->toContain('search_query=grudge');
+});
+
+test('the picked track plays and pauses from its card and can be removed', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel);
+    $post->update(['meta' => ['audio' => [
+        'id' => '1234567890',
+        'title' => 'Summer Song',
+        'preview_url' => 'https://example.com/preview.mp3',
+    ]]]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-selected-preview');
+    $page->script('HTMLMediaElement.prototype.play = function () { return Promise.resolve(); }; HTMLMediaElement.prototype.pause = function () {};');
+
+    $page->click('@instagram-music-selected-preview');
+    waitForState($page, '@instagram-music-selected-preview', "element.getAttribute('aria-label') === '".__('posts.form.instagram.music.pause')."'");
+    $page->assertAttribute('@instagram-music-selected-preview', 'aria-label', __('posts.form.instagram.music.pause'));
+
+    $page->click('@instagram-music-selected-preview');
+    waitForState($page, '@instagram-music-selected-preview', "element.getAttribute('aria-label') === '".__('posts.form.instagram.music.play')."'");
+    $page->assertAttribute('@instagram-music-selected-preview', 'aria-label', __('posts.form.instagram.music.play'));
+
+    $page->click('@instagram-music-remove');
+    waitFor($page, '@instagram-music-add');
+    $page->assertMissing('@instagram-music-selected')
+        ->click('@composer-save-draft');
+    waitForGone($page, '@post-composer-dialog');
+
+    $page->assertNoJavaScriptErrors();
+    expect(data_get($post->fresh()->meta, 'audio'))->toBeNull();
+});
+
+test('a trial reel shows its explanation under the options and its badge on the preview', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+    $post->update(['meta' => ['trial_graduation' => 'MANUAL']]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-trial-reel-hint');
+
+    $page->assertSeeIn('@instagram-trial-reel-hint', __('posts.form.instagram.trial_reel.manual_hint'))
+        ->assertSeeIn('@instagram-preview-trial', __('posts.form.instagram.trial_reel.badge'))
+        ->assertNoJavaScriptErrors();
+});
+
+test('collaborators added on the instagram card are saved with the post', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-collaborator-input');
+    $page->type('@instagram-collaborator-input', '@alice')
+        ->keys('@instagram-collaborator-input', 'Enter');
+    waitFor($page, '@instagram-collaborators-notice');
+    $page->click('@instagram-collaborators-notice-dismiss')
+        ->type('@instagram-collaborator-input', 'bob')
+        ->click('@instagram-collaborator-add');
+    waitFor($page, '@instagram-collaborator-bob');
+
+    $page->click('@composer-save-draft');
+    waitForGone($page, '@post-composer-dialog');
+
+    $page->assertNoJavaScriptErrors();
+    expect(data_get($post->fresh()->meta, 'collaborators'))->toBe(['alice', 'bob']);
+});
+
+test('a collaborator typed without pressing Enter is added when the field loses focus and saved with the post', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-collaborator-input');
+    $page->type('@instagram-collaborator-input', '@alice')
+        ->click('@composer-save-draft');
+    waitForGone($page, '@post-composer-dialog');
+
+    $page->assertNoJavaScriptErrors();
+    expect(data_get($post->fresh()->meta, 'collaborators'))->toBe(['alice']);
+});
+
+test('playing the reel preview video plays the picked track at the chosen music volume and pausing it stops the track', function () {
+    fakeChannelSettingsApis();
+    $video = [['id' => (string) Str::uuid(), 'type' => 'video', 'path' => 'medias/clip.mp4', 'url' => 'https://example.com/clip.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'clip.mp4']];
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel, $video);
+    $post->update(['meta' => ['audio' => [
+        'id' => '1234567890',
+        'title' => 'Summer Song',
+        'artist' => 'The Band',
+        'preview_url' => 'https://example.com/preview.mp3',
+        'audio_volume' => 40,
+        'video_volume' => 30,
+    ]]]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-selected-preview');
+    waitFor($page, '@instagram-reel-preview video');
+    $page->script(<<<'JS'
+        (() => {
+            const where = (media, suffix = '') => `${media.closest?.('[data-testid="instagram-reel-preview"]') ? 'PREVIEW' : media.tagName}${suffix}`;
+            window.__played = [];
+            window.__audioVolume = null;
+            HTMLMediaElement.prototype.play = function () {
+                window.__played.push(where(this));
+                if (this.tagName === 'AUDIO') window.__audioVolume = Math.round(this.volume * 100);
+                Object.defineProperty(this, 'paused', { value: false, configurable: true });
+                this.dispatchEvent(new Event('play'));
+                return Promise.resolve();
+            };
+            HTMLMediaElement.prototype.pause = function () {
+                window.__played.push(where(this, ':paused'));
+                Object.defineProperty(this, 'paused', { value: true, configurable: true });
+                this.dispatchEvent(new Event('pause'));
+            };
+            return true;
+        })()
+    JS);
+
+    $page->script("document.querySelector('[data-testid=\"instagram-reel-preview\"] video').parentElement.click()");
+    waitForCondition($page, "window.__played.includes('AUDIO')");
+
+    expect($page->script('window.__played'))->toBe(['PREVIEW', 'AUDIO'])
+        ->and($page->script('window.__audioVolume'))->toBe(40)
+        ->and($page->script("Math.round(document.querySelector('[data-testid=\"instagram-reel-preview\"] video').volume * 100)"))->toBe(30);
+
+    $page->script("document.querySelector('[data-testid=\"instagram-reel-preview\"] video').parentElement.click()");
+    waitForCondition($page, "window.__played.includes('AUDIO:paused')");
+
+    expect($page->script("window.__played.includes('PREVIEW:paused') && window.__played.includes('AUDIO:paused')"))->toBeTrue();
+    $page->assertNoJavaScriptErrors();
+});
+
+test('playing the picked track from its card plays the music only and leaves the reel preview video still', function () {
+    fakeChannelSettingsApis();
+    $video = [['id' => (string) Str::uuid(), 'type' => 'video', 'path' => 'medias/clip.mp4', 'url' => 'https://example.com/clip.mp4', 'mime_type' => 'video/mp4', 'original_filename' => 'clip.mp4']];
+    $post = seedChannelSettingsPost(Platform::InstagramFacebook, ContentType::InstagramReel, $video);
+    $post->update(['meta' => ['audio' => [
+        'id' => '1234567890',
+        'title' => 'Summer Song',
+        'artist' => 'The Band',
+        'preview_url' => 'https://example.com/preview.mp3',
+        'video_volume' => 30,
+    ]]]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-music-selected-preview');
+    waitFor($page, '@instagram-reel-preview video');
+    $page->script(<<<'JS'
+        (() => {
+            const where = (media, suffix = '') => `${media.closest?.('[data-testid="instagram-reel-preview"]') ? 'PREVIEW' : media.tagName}${suffix}`;
+            window.__played = [];
+            HTMLMediaElement.prototype.play = function () { window.__played.push(where(this)); return Promise.resolve(); };
+            HTMLMediaElement.prototype.pause = function () { window.__played.push(where(this, ':paused')); };
+            return true;
+        })()
+    JS);
+
+    $page->assertSeeIn('@instagram-preview-audio', 'Summer Song · The Band')
+        ->click('@instagram-music-selected-preview');
+    waitForCondition($page, "window.__played.includes('AUDIO')");
+    $page->script('new Promise((resolve) => setTimeout(resolve, 300))');
+
+    expect($page->script('window.__played'))->not->toContain('PREVIEW');
+    $page->assertNoJavaScriptErrors();
+});
+
+test('a collaborator link shows the link cursor of a link that opens a new tab', function () {
+    fakeChannelSettingsApis();
+    $post = seedChannelSettingsPost(Platform::Instagram, ContentType::InstagramReel);
+    $post->update(['meta' => ['collaborators' => ['alice']]]);
+
+    $page = visit(route('app.posts.edit', $post))->resize(1280, 900);
+    waitFor($page, '@instagram-collaborator-alice');
+
+    expect($page->script("getComputedStyle(document.querySelector('[data-testid=\"instagram-collaborator-alice\"]')).cursor"))->toBe('alias')
+        ->and($page->script("document.querySelector('[data-testid=\"instagram-collaborator-alice\"]').target"))->toBe('_blank');
+    $page->assertNoJavaScriptErrors();
+});

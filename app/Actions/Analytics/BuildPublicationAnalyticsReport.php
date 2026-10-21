@@ -9,12 +9,13 @@ use App\Dto\Analytics\PublicationFilter;
 use App\Enums\Analytics\MetricAvailability;
 use App\Enums\Analytics\MetricKey;
 use App\Enums\User\WeekStart;
-use App\Models\PostPlatform;
+use App\Models\Post;
 use App\Models\Workspace;
 use App\Support\Analytics\MetricComparison;
 use App\Support\Analytics\PeriodBuckets;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\LazyCollection;
 
 class BuildPublicationAnalyticsReport
@@ -108,6 +109,8 @@ class BuildPublicationAnalyticsReport
         }
         unset($bucket);
 
+        $postMedia = $this->postMedia([...$topReactions, ...$topComments]);
+
         return [
             'current_totals' => $this->finalizeTotals($currentTotals),
             'previous_totals' => $this->finalizeTotals($previousTotals),
@@ -117,8 +120,8 @@ class BuildPublicationAnalyticsReport
                 'buckets' => $buckets,
             ],
             'top_posts' => [
-                'reactions' => $this->top($topReactions),
-                'comments' => $this->top($topComments),
+                'reactions' => $this->top($topReactions, $postMedia),
+                'comments' => $this->top($topComments, $postMedia),
             ],
             'performance' => $this->performance($currentAccounts, $previousAccounts),
         ];
@@ -140,11 +143,11 @@ class BuildPublicationAnalyticsReport
     public function query(Workspace $workspace, CarbonImmutable $start, CarbonImmutable $end, ?array $accountKeys = null, ?PublicationFilter $filter = null): Builder
     {
         return $this->latestSnapshots->execute($workspace->id, $accountKeys, $start, $end)
-            ->leftJoin((new PostPlatform)->getTable().' as destination', 'destination.id', '=', 'publication.post_platform_id')
+            ->leftJoin((new Post)->getTable().' as destination', 'destination.id', '=', 'publication.post_id')
             ->when($filter !== null, fn (Builder $filtered): Builder => $filter->apply($filtered))
             ->select([
                 'publication.id', 'publication.social_account_key', 'publication.social_account_id',
-                'publication.post_platform_id', 'destination.post_id', 'publication.platform', 'publication.network',
+                'publication.post_id', 'publication.platform', 'publication.network',
                 'publication.account_display_name', 'publication.account_username',
                 'publication.account_avatar_url', 'publication.remote_id',
                 'publication.provider_published_at', 'publication.origin', 'publication.content_type',
@@ -290,30 +293,47 @@ class BuildPublicationAnalyticsReport
         }
     }
 
-    /** @return list<array<string, mixed>> */
-    private function top(array $rows): array
+    /**
+     * The first image or video of each ranked post, keyed by post id.
+     *
+     * @param  list<object>  $rows
+     * @return Collection<string, array<string, mixed>>
+     */
+    private function postMedia(array $rows): Collection
     {
-        return array_map(function (object $row): array {
-            return [
-                'id' => $row->id,
-                'post_platform_id' => $row->post_platform_id,
-                'post_id' => $row->post_id,
-                'social_account_key' => $row->social_account_key,
-                'platform' => $row->platform,
-                'name' => $row->account_display_name,
-                'username' => $row->account_username,
-                'avatar_url' => $row->account_avatar_url,
-                'origin' => $row->origin,
-                'content_type' => $row->content_type,
-                'availability' => $row->availability,
-                'published_at' => $row->provider_published_at,
-                'permalink' => $row->permalink,
-                'excerpt' => $row->excerpt,
-                'preview_metadata' => $row->preview_metadata ? json_decode((string) $row->preview_metadata, true) : null,
-                'reactions' => $row->reactions_count === null ? null : (int) $row->reactions_count,
-                'comments' => $row->comments_count === null ? null : (int) $row->comments_count,
-            ];
-        }, $rows);
+        return Post::query()
+            ->whereKey(collect($rows)->pluck('post_id')->filter())
+            ->get(['id', 'media'])
+            ->mapWithKeys(fn (Post $post): array => [$post->id => $post->coverMedia()?->toArray()])
+            ->filter();
+    }
+
+    /**
+     * @param  list<object>  $rows
+     * @param  Collection<string, array<string, mixed>>  $postMedia
+     * @return list<array<string, mixed>>
+     */
+    private function top(array $rows, Collection $postMedia): array
+    {
+        return collect($rows)->map(fn (object $row): array => [
+            'id' => $row->id,
+            'post_id' => $row->post_id,
+            'social_account_key' => $row->social_account_key,
+            'platform' => $row->platform,
+            'name' => $row->account_display_name,
+            'username' => $row->account_username,
+            'avatar_url' => $row->account_avatar_url,
+            'origin' => $row->origin,
+            'content_type' => $row->content_type,
+            'availability' => $row->availability,
+            'published_at' => $row->provider_published_at,
+            'permalink' => $row->permalink,
+            'excerpt' => $row->excerpt,
+            'preview_metadata' => $row->preview_metadata ? json_decode((string) $row->preview_metadata, true) : null,
+            'media' => $postMedia->get((string) $row->post_id),
+            'reactions' => $row->reactions_count === null ? null : (int) $row->reactions_count,
+            'comments' => $row->comments_count === null ? null : (int) $row->comments_count,
+        ])->all();
     }
 
     /** @return list<array<string, mixed>> */

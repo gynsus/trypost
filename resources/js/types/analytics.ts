@@ -1,3 +1,4 @@
+import type { MediaItem } from '@/types/media';
 import type { SocialAccountStatusValue } from '@/types/social-account-status';
 
 export interface Comparison {
@@ -37,7 +38,6 @@ export interface PostBucket {
 
 export interface TopPost {
     id: string;
-    post_platform_id: string | null;
     post_id: string | null;
     social_account_key: string;
     platform: string;
@@ -52,6 +52,7 @@ export interface TopPost {
     permalink: string | null;
     excerpt: string | null;
     preview_metadata: Record<string, unknown> | null;
+    media: MediaItem | null;
     reactions: number | null;
     comments: number | null;
 }
@@ -76,10 +77,7 @@ export type PerformanceRow = AccountIdentityData &
     Record<PerformanceMetric, Comparison>;
 
 export interface InsightsSyncCadence {
-    discovery_hours: number;
-    x_discovery_hours: number;
     metrics_days: number;
-    x_metrics_days: number;
 }
 
 export interface CoverageRow {
@@ -235,6 +233,7 @@ export interface ChannelPublicationRow {
     rank: number;
     excerpt: string | null;
     thumbnail_url: string | null;
+    media: MediaItem | null;
     permalink: string | null;
     published_at: string;
     content_type: string | null;
@@ -256,7 +255,7 @@ export interface PublicationAnalyticsDetail {
     reason: null;
     publication: {
         id: string;
-        post_platform_id: string | null;
+        post_id: string | null;
         social_account_key: string;
         platform: string;
         origin: string;

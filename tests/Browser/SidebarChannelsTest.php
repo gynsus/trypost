@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
@@ -238,13 +237,7 @@ test('an expanded channel shows its scheduled count on the Publish item', functi
     $empty = SocialAccount::factory()->linkedin()->create(['workspace_id' => $user->current_workspace_id]);
 
     foreach (range(1, 3) as $ignored) {
-        $post = Post::factory()->scheduled()->create(['workspace_id' => $user->current_workspace_id, 'user_id' => $user->id]);
-        PostPlatform::factory()->create([
-            'post_id' => $post->id,
-            'social_account_id' => $channel->id,
-            'platform' => $channel->platform,
-            'enabled' => true,
-        ]);
+        Post::factory()->forAccount($channel)->scheduled()->create(['user_id' => $user->id]);
     }
 
     $this->actingAs($user);
@@ -281,6 +274,40 @@ test('keyboard focus reveals the channels header actions', function () {
     expect($page->script("getComputedStyle({$actions}).opacity"))->toBe('1');
     $page->assertMissing('@sidebar-channels-settings')
         ->assertMissing('@sidebar-channels-connect')
+        ->assertNoJavaScriptErrors();
+});
+
+test('hovering anywhere on the sidebar reveals the channels header actions', function () {
+    $user = sidebarChannelsUser('admin');
+    SocialAccount::factory()->linkedin()->create(['workspace_id' => $user->current_workspace_id]);
+    $this->actingAs($user);
+
+    $page = visit(route('app.posts.index'));
+    waitFor($page, '@sidebar-new');
+
+    $page->hover('@app-layout-content');
+    waitForState($page, '@sidebar-channels-actions', "getComputedStyle(element).opacity === '0'");
+
+    expect($page->script("getComputedStyle(document.querySelector('[data-testid=\"sidebar-channels-actions\"]')).opacity"))->toBe('0');
+
+    $page->hover('@sidebar-new');
+    waitForState($page, '@sidebar-channels-actions', "getComputedStyle(element).opacity === '1'");
+
+    expect($page->script("getComputedStyle(document.querySelector('[data-testid=\"sidebar-channels-actions\"]')).opacity"))->toBe('1');
+    $page->assertVisible('@sidebar-channels-search')
+        ->assertVisible('@sidebar-channels-settings')
+        ->assertVisible('@sidebar-channels-connect')
+        ->assertNoJavaScriptErrors();
+});
+
+test('the repurposes item has no beta badge', function () {
+    $this->actingAs(sidebarChannelsUser('admin'));
+
+    $page = visit(route('app.posts.index'));
+    waitFor($page, '[data-testid="nav-/repurposes"]');
+
+    $page->assertVisible('[data-testid="nav-/repurposes"]')
+        ->assertMissing('[data-testid="nav-badge-/repurposes"]')
         ->assertNoJavaScriptErrors();
 });
 

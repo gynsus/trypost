@@ -10,7 +10,6 @@ use App\Models\AnalyticsAccountDailySnapshot;
 use App\Models\AnalyticsPublication;
 use App\Models\AnalyticsPublicationDailySnapshot;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
@@ -31,22 +30,17 @@ beforeEach(function () {
     $this->user->update(['current_workspace_id' => $this->workspace->id]);
 
     $this->publish = function (SocialAccount $account, int $reactions, string $excerpt, ?WorkspaceLabel $label = null, string $publishedAt = '2026-09-15 12:00:00', array $metrics = []): AnalyticsPublication {
-        $post = Post::factory()->published()->create(['workspace_id' => $account->workspace_id, 'user_id' => $this->user->id]);
+        $post = Post::factory()->forAccount($account)->published()->create(['user_id' => $this->user->id]);
 
         if ($label !== null) {
             $post->labels()->attach($label);
         }
 
-        $destination = PostPlatform::factory()->published()->create([
-            'post_id' => $post->id,
-            'social_account_id' => $account->id,
-            'platform' => $account->platform,
-        ]);
         $publication = AnalyticsPublication::factory()->create([
             'workspace_id' => $account->workspace_id,
             'social_account_id' => $account->id,
             'social_account_key' => $account->id,
-            'post_platform_id' => $destination->id,
+            'post_id' => $post->id,
             'platform' => $account->platform,
             'network' => $account->platform->network(),
             'platform_user_id' => $account->platform_user_id,
@@ -252,7 +246,6 @@ test('the insights page shares the sync cadence and the extended performance met
             ->component('insights/Index')
             ->where('sync', SyncCadence::toArray())
             ->where('sync.metrics_days', 30)
-            ->where('sync.x_metrics_days', 20)
             ->where('report.performance.0.username', 'bravo')
             ->where('report.performance.0.clicks.value', 7)
             ->where('report.performance.0.impressions.value', 200)
@@ -261,16 +254,9 @@ test('the insights page shares the sync cadence and the extended performance met
             ->etc());
 });
 
-test('the sync cadence follows the discovery settings the scheduler uses', function () {
-    config()->set('trypost.analytics.discovery_interval_hours', 6);
-    config()->set('trypost.analytics.x_discovery_interval_hours', 48);
-
-    expect(SyncCadence::toArray())->toBe([
-        'discovery_hours' => 6,
-        'x_discovery_hours' => 24,
-        'metrics_days' => 30,
-        'x_metrics_days' => 20,
-    ]);
+test('the sync cadence shares the metrics window and x closes it on its last read', function () {
+    expect(SyncCadence::toArray())->toBe(['metrics_days' => 30])
+        ->and(SyncCadence::metricsWindowDays(Platform::X))->toBe(max(SyncCadence::X_METRICS_DAYS));
 });
 
 test('the export of a workspace without connected channels has no past analytics', function () {

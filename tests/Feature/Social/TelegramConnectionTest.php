@@ -7,13 +7,14 @@ use App\Events\TelegramChannelConnected;
 use App\Events\TelegramConnectFailed;
 use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\TokenExpiredException;
+use App\Jobs\PostHog\TrackSocialAccountConnected;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\Social\ConnectionVerifier;
 use App\Services\Social\Telegram\TelegramConnectCode;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
@@ -262,14 +263,8 @@ it('consumes the code once so it cannot be replayed for another chat', function 
 
 it('stores reaction counts on the matching post from a reaction update', function () {
     $account = SocialAccount::factory()->telegram()->create(['workspace_id' => $this->workspace->id]);
-    $post = Post::factory()->create([
-        'workspace_id' => $this->workspace->id,
+    $post = Post::factory()->forAccount($account)->published()->create([
         'user_id' => $this->user->id,
-    ]);
-    $postPlatform = PostPlatform::factory()->published()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $account->id,
-        'platform' => Platform::Telegram,
         'platform_post_id' => '42',
     ]);
 
@@ -288,7 +283,7 @@ it('stores reaction counts on the matching post from a reaction update', functio
         ->postJson(route('telegram.webhook'), $update)
         ->assertNoContent();
 
-    expect(data_get($postPlatform->fresh()->meta, 'reactions'))
+    expect(data_get($post->fresh()->meta, 'reactions'))
         ->toBe([['type' => '👍', 'count' => 12], ['type' => '❤️', 'count' => 5]]);
 });
 
@@ -298,11 +293,8 @@ it('does not store reactions on a post from a different channel with the same me
         'platform_user_id' => '-1009999999999',
         'meta' => ['chat_id' => '-1009999999999', 'username' => 'other', 'type' => 'channel'],
     ]);
-    $post = Post::factory()->create(['workspace_id' => $this->workspace->id, 'user_id' => $this->user->id]);
-    $postPlatform = PostPlatform::factory()->published()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $otherAccount->id,
-        'platform' => Platform::Telegram,
+    $post = Post::factory()->forAccount($otherAccount)->published()->create([
+        'user_id' => $this->user->id,
         'platform_post_id' => '42',
     ]);
 
@@ -318,16 +310,13 @@ it('does not store reactions on a post from a different channel with the same me
         ->postJson(route('telegram.webhook'), $update)
         ->assertNoContent();
 
-    expect(data_get($postPlatform->fresh()->meta, 'reactions'))->toBeNull();
+    expect(data_get($post->fresh()->meta, 'reactions'))->toBeNull();
 });
 
 it('labels custom emoji reactions with a fallback', function () {
     $account = SocialAccount::factory()->telegram()->create(['workspace_id' => $this->workspace->id]);
-    $post = Post::factory()->create(['workspace_id' => $this->workspace->id, 'user_id' => $this->user->id]);
-    $postPlatform = PostPlatform::factory()->published()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $account->id,
-        'platform' => Platform::Telegram,
+    $post = Post::factory()->forAccount($account)->published()->create([
+        'user_id' => $this->user->id,
         'platform_post_id' => '77',
     ]);
 
@@ -343,7 +332,7 @@ it('labels custom emoji reactions with a fallback', function () {
         ->postJson(route('telegram.webhook'), $update)
         ->assertNoContent();
 
-    expect(data_get($postPlatform->fresh()->meta, 'reactions'))
+    expect(data_get($post->fresh()->meta, 'reactions'))
         ->toBe([['type' => 'Custom', 'count' => 3]]);
 });
 
@@ -511,4 +500,77 @@ it('reports a busy connect instead of letting the webhook fail', function () {
     );
 
     expect($this->workspace->socialAccounts()->count())->toBe(0);
+});
+
+it('telegram connection uses source telegram', function () {
+    enablePostHog();
+    Http::fake();
+    Bus::fake([TrackSocialAccountConnected::class]);
+
+    $owner = User::factory()->create(['account_id' => $this->workspace->account_id]);
+    $this->workspace->account->update(['owner_id' => $owner->id]);
+
+    $code = TelegramConnectCode::issue($this->workspace->id, now()->addMinutes(15));
+
+    $this->withHeader('X-Telegram-Bot-Api-Secret-Token', 'shh-secret')
+        ->postJson(route('telegram.webhook'), telegramUpdate($code))
+        ->assertNoContent();
+
+    $account = SocialAccount::where('platform', Platform::Telegram)->firstOrFail();
+
+    Bus::assertDispatchedOnce(TrackSocialAccountConnected::class);
+    Bus::assertDispatched(TrackSocialAccountConnected::class, fn (TrackSocialAccountConnected $job): bool => $job->socialAccountId === (string) $account->id
+        && $job->userId === null
+        && $job->source === TrackSocialAccountConnected::SOURCE_TELEGRAM);
+});
+
+it('a telegram reconnect does not dispatch connected', function () {
+    enablePostHog();
+    Http::fake();
+    Bus::fake([TrackSocialAccountConnected::class]);
+
+    $account = SocialAccount::factory()->telegram()->create([
+        'workspace_id' => $this->workspace->id,
+        'platform_user_id' => '-1001234567890',
+    ]);
+
+    $code = TelegramConnectCode::issue($this->workspace->id, now()->addMinutes(15), $account->id);
+
+    $this->withHeader('X-Telegram-Bot-Api-Secret-Token', 'shh-secret')
+        ->postJson(route('telegram.webhook'), telegramUpdate($code))
+        ->assertNoContent();
+
+    Bus::assertNotDispatched(TrackSocialAccountConnected::class);
+});
+
+it('a telegram connection still succeeds when tracking it fails', function () {
+    enablePostHog();
+    Http::fake();
+    failDispatchOf(TrackSocialAccountConnected::class);
+
+    $owner = User::factory()->create(['account_id' => $this->workspace->account_id]);
+    $this->workspace->account->update(['owner_id' => $owner->id]);
+
+    $code = TelegramConnectCode::issue($this->workspace->id, now()->addMinutes(15));
+
+    $this->withHeader('X-Telegram-Bot-Api-Secret-Token', 'shh-secret')
+        ->postJson(route('telegram.webhook'), telegramUpdate($code))
+        ->assertNoContent();
+
+    expect(SocialAccount::where('platform', Platform::Telegram)->exists())->toBeTrue();
+});
+
+it('a telegram connection does not dispatch connected when PostHog is disabled', function () {
+    config(['services.posthog.enabled' => false]);
+    Http::fake();
+    Bus::fake([TrackSocialAccountConnected::class]);
+
+    $code = TelegramConnectCode::issue($this->workspace->id, now()->addMinutes(15));
+
+    $this->withHeader('X-Telegram-Bot-Api-Secret-Token', 'shh-secret')
+        ->postJson(route('telegram.webhook'), telegramUpdate($code))
+        ->assertNoContent();
+
+    expect(SocialAccount::where('platform', Platform::Telegram)->exists())->toBeTrue();
+    Bus::assertNotDispatched(TrackSocialAccountConnected::class);
 });

@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace App\Jobs\PostHog;
 
 use App\Models\Account;
-use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Services\PostHogService;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -67,23 +65,19 @@ class SyncAccountPublishingActivity implements ShouldBeUniqueUntilProcessing, Sh
             return;
         }
 
-        $postIds = Post::query()
-            ->select('posts.id')
-            ->whereRelation('workspace', 'account_id', $account->id);
-
-        $latestPublication = PostPlatform::query()
-            ->published()
-            ->whereNotNull('published_at')
-            ->whereIn('post_id', $postIds)
-            ->latest('published_at')
-            ->latest('updated_at')
-            ->latest('id')
+        $latestPublication = $account->posts()
+            ->createdInTryPost()
+            ->publicationPublished()
+            ->whereNotNull('posts.published_at')
+            ->latest('posts.published_at')
+            ->latest('posts.publication_updated_at')
+            ->latest('posts.id')
             ->first();
 
         $postHog->groupIdentifyNow('account', (string) $account->id, [
             'last_post_published_at' => $latestPublication?->published_at?->toIso8601String(),
-            'last_post_published_network' => $latestPublication?->platform->network(),
-            'last_published_post_id' => $latestPublication?->post_id,
+            'last_post_published_network' => $latestPublication?->platform?->network(),
+            'last_published_post_id' => $latestPublication?->id,
         ]);
     }
 }

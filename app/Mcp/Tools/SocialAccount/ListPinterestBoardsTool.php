@@ -17,8 +17,14 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
-#[Description('List Pinterest boards for a connected Pinterest account. Use the returned board id as platforms[].meta.board_id when creating or updating a Pinterest post (required to publish).')]
+#[IsReadOnly(true)]
+#[IsDestructive(false)]
+#[IsOpenWorld(false)]
+#[Description('List Pinterest boards for a connected Pinterest account. Use the returned board id as meta.board_id (destinations[].meta.board_id in create-posts-tool) when creating or updating a Pinterest post (required to publish).')]
 class ListPinterestBoardsTool extends Tool
 {
     use AuthorizesMcpTool;

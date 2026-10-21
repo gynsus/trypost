@@ -25,7 +25,6 @@ use App\Jobs\SendNotification;
 use App\Mail\PostApprovalRequested;
 use App\Models\Media;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\Repurpose;
 use App\Models\RepurposeItem;
 use App\Models\SocialAccount;
@@ -33,12 +32,14 @@ use App\Models\Workspace;
 use App\Services\Post\MediaAttacher;
 use App\Services\Repurpose\CaptionAdapter;
 use App\Services\Social\ContentSanitizer;
+use App\Services\Social\Discord\DiscordClient;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Mockery\MockInterface;
 
 beforeEach(function () {
     Queue::fake([BootstrapAccountAnalytics::class, CollectAccountDailySnapshot::class]);
@@ -102,7 +103,7 @@ test('it creates one post per destination and publishes each', function () {
             ->and($post->status)->toBe(PostStatus::Scheduled)
             ->and($post->schedule_mode)->toBe(ScheduleMode::Custom)
             ->and($post->media)->toHaveCount(1)
-            ->and($post->postPlatforms()->enabled()->count())->toBe(1);
+            ->and($post->social_account_id)->not->toBeNull();
     }
 
     expect(Post::query()->due()->whereIn('id', $posts->pluck('id'))->count())->toBe(2);
@@ -127,7 +128,7 @@ test('the video is downloaded once and every post owns its own copy', function (
         ->and($paths->unique())->toHaveCount(2);
 });
 
-test('destination meta is carried onto the post platform', function () {
+test('destination meta is carried onto the post', function () {
     Bus::fake([PublishPost::class]);
     fakeVideoDownload();
 
@@ -135,13 +136,12 @@ test('destination meta is carried onto the post platform', function () {
 
     processItem($item);
 
-    $tiktokPlatform = PostPlatform::query()
-        ->enabled()
-        ->whereHas('post', fn ($query) => $query->where('repurpose_item_id', $item->id))
+    $tiktokPost = Post::query()
+        ->where('repurpose_item_id', $item->id)
         ->where('platform', Platform::TikTok)
         ->sole();
 
-    expect($tiktokPlatform->meta)->toEqual(['privacy_level' => PrivacyLevel::PublicToEveryone->value]);
+    expect($tiktokPost->meta)->toEqual(['privacy_level' => PrivacyLevel::PublicToEveryone->value]);
 });
 
 test('a caption over a destination limit is shortened for that post only', function () {
@@ -153,12 +153,10 @@ test('a caption over a destination limit is shortened for that post only', funct
 
     processItem($item, $long);
 
-    $captions = PostPlatform::query()
-        ->enabled()
-        ->whereHas('post', fn ($query) => $query->where('repurpose_item_id', $item->id))
-        ->with('post')
+    $captions = Post::query()
+        ->where('repurpose_item_id', $item->id)
         ->get()
-        ->mapWithKeys(fn (PostPlatform $platform) => [$platform->platform->value => $platform->post->content]);
+        ->mapWithKeys(fn (Post $post) => [$post->platform->value => $post->content]);
 
     expect(Platform::TikTok->contentOverflow($captions[Platform::TikTok->value]))->toBe(0)
         ->and(Platform::YouTube->contentOverflow($captions[Platform::YouTube->value]))->toBe(0)
@@ -215,6 +213,23 @@ test('a mastodon caption leaves room for the content warning', function () {
 
     expect(mb_strlen($caption))->toBeGreaterThan(300)
         ->and($account->contentOverflow($caption, Platform::Mastodon->reservedLength(['spoiler_text' => $warning])))->toBe(0);
+});
+
+test('a discord destination stores the channel name from the cached list, not the one it was saved with', function () {
+    Bus::fake([PublishPost::class]);
+    fakeVideoDownload();
+    $this->mock(DiscordClient::class, function (MockInterface $client): void {
+        $client->shouldReceive('cachedChannels')->andReturn([['id' => '111', 'name' => 'general']]);
+        $client->shouldNotReceive('channels');
+    });
+
+    $account = SocialAccount::factory()->create(['platform' => Platform::Discord, 'platform_user_id' => '999']);
+    $item = repurposeItemTo($account, ['channel_id' => '111', 'channel_name' => 'sent-by-client']);
+
+    processItem($item);
+
+    expect(Post::query()->where('repurpose_item_id', $item->id)->sole()->meta)
+        ->toEqual(['channel_id' => '111', 'channel_name' => 'general']);
 });
 
 test('a failed download throws so the job retries, leaving no post behind', function () {
@@ -668,11 +683,10 @@ test('a requester repurpose run emails each approver once with every post, never
 
     expect($ownerId)->not->toBeNull()
         ->and($postIds)->toHaveCount(2)
-        ->and($notifications->map(fn (SendNotification $job): string => $job->user->id)->sort()->values()->all())
-        ->toBe(collect([$ownerId, $publisher->id])->sort()->values()->all());
+        ->and($notifications->map(fn (SendNotification $job): string => "{$job->user->id}:{$job->mailable->postId}")->sort()->values()->all())
+        ->toBe(collect([$ownerId, $publisher->id])->crossJoin($postIds)->map(fn (array $pair): string => implode(':', $pair))->sort()->values()->all());
 
     $notifications->each(fn (SendNotification $job) => expect($job->type)->toBe(Type::Collaboration)
-        ->and(collect($job->mailable->postIds)->sort()->values()->all())->toBe($postIds)
         ->and($job->mailable->requester->is($requester))->toBeTrue());
     expect(Post::whereIn('id', $postIds)->pluck('approval_requested_by')->unique()->values()->all())->toBe([$requester->id]);
 });
@@ -696,8 +710,8 @@ test('a retry after the approval request was lost still emails the approvers', f
     expect($item->fresh()->status)->toBe(ItemStatus::Published)
         ->and($postIds)->toHaveCount(2);
 
-    Queue::assertPushed(SendNotification::class, fn (SendNotification $job): bool => $job->mailable instanceof PostApprovalRequested
-        && collect($job->mailable->postIds)->sort()->values()->all() === $postIds);
+    expect(Queue::pushed(SendNotification::class, fn (SendNotification $job): bool => $job->mailable instanceof PostApprovalRequested)
+        ->map(fn (SendNotification $job): string => $job->mailable->postId)->unique()->sort()->values()->all())->toBe($postIds);
 });
 
 test('a requester repurpose in draft mode sends no approval email', function () {
@@ -730,7 +744,7 @@ test('a stored google business destination is skipped quietly', function () {
 
     processItem($item->fresh());
 
-    $platforms = PostPlatform::query()->whereIn('post_id', Post::where('repurpose_item_id', $item->id)->pluck('id'))->pluck('social_account_id');
+    $platforms = Post::query()->where('repurpose_item_id', $item->id)->pluck('social_account_id');
 
     expect($item->fresh()->status)->toBe(ItemStatus::Published)
         ->and($platforms)->not->toContain($googleBusiness->id)

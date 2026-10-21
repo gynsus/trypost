@@ -13,7 +13,6 @@ use App\Models\AnalyticsPublication;
 use App\Models\AnalyticsPublicationDailySnapshot;
 use App\Models\AnalyticsSyncState;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
@@ -73,23 +72,16 @@ function insightsParitySetup(): array
             'date' => now('UTC')->subDays(2)->toDateString(),
             'followers_count' => $followers,
         ]);
-        $created = Post::factory()->published()->create([
-            'workspace_id' => $workspace->id,
+        $created = Post::factory()->forAccount($account)->published()->create([
             'user_id' => $user->id,
             'content' => "Insights parity post {$username}",
-            'published_at' => now()->subDays(3),
-        ]);
-        $destination = PostPlatform::factory()->published()->create([
-            'post_id' => $created->id,
-            'social_account_id' => $account->id,
-            'platform' => $platform,
             'published_at' => now()->subDays(3),
         ]);
         $publication = AnalyticsPublication::factory()->create([
             'workspace_id' => $workspace->id,
             'social_account_id' => $account->id,
             'social_account_key' => $account->id,
-            'post_platform_id' => $destination->id,
+            'post_id' => $created->id,
             'platform' => $platform,
             'network' => $platform->network(),
             'account_username' => $username,
@@ -147,9 +139,8 @@ test('the header offers CSV and Markdown exports of the filtered page and explai
     waitForInsightsParityTestId($page, 'insights-sync-popover');
 
     $page->assertSeeIn('@insights-sync-popover', 'How Insights stay updated')
-        ->assertSeeIn('@insights-sync-new-posts', 'every 3 hours')
-        ->assertSeeIn('@insights-sync-new-posts', 'every 24 hours on X')
-        ->assertSeeIn('@insights-sync-metrics', 'last 30 days (20 on X)')
+        ->assertSeeIn('@insights-sync-new-posts', 'New posts are picked up daily.')
+        ->assertSeeIn('@insights-sync-metrics', 'up to 30 days after publishing')
         ->assertSeeIn('@insights-sync-last', 'Last synced 2 hours ago')
         ->assertNoJavaScriptErrors();
 });

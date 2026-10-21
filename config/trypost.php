@@ -18,6 +18,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Changelog ("What's New")
+    |--------------------------------------------------------------------------
+    |
+    | Shows the sidebar card and the "What's New" modal fed by the entries
+    | under resources/changelog/, synced with `php artisan changelog:sync`
+    | on every deploy. On by default, self-hosted included.
+    |
+    */
+
+    'changelog' => [
+        'enabled' => (bool) env('CHANGELOG_ENABLED', true),
+        'path' => resource_path('changelog'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Legal pages
     |--------------------------------------------------------------------------
     |
@@ -31,6 +47,50 @@ return [
         'terms_url' => env('LEGAL_TERMS_URL', 'https://trypost.it/terms'),
         'privacy_url' => env('LEGAL_PRIVACY_URL', 'https://trypost.it/privacy'),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Well-known files
+    |--------------------------------------------------------------------------
+    |
+    | Files served at /.well-known/{name} as plain text, keyed by name. The
+    | content always comes from the environment so no install serves another
+    | install's tokens; an empty value answers 404. Add a provider with one
+    | line here and one env variable.
+    |
+    */
+
+    'well_known' => [
+        'openai-apps-challenge' => env('OPENAI_APPS_CHALLENGE'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | ChatGPT MCP egress ranges
+    |--------------------------------------------------------------------------
+    |
+    | ChatGPT calls the MCP server from the ranges OpenAI publishes
+    | (https://developers.openai.com/api/docs/guides/ip-addresses). From
+    | there, a request without a token may list the tools, and a tool call
+    | is answered with the sign-in prompt ChatGPT shows in the conversation.
+    | Every other client keeps the plain 401.
+    |
+    */
+
+    'mcp_chatgpt_ip_ranges_url' => env('MCP_CHATGPT_IP_RANGES_URL', 'https://openai.com/chatgpt-connectors.json'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Claude MCP egress ranges
+    |--------------------------------------------------------------------------
+    |
+    | Claude calls MCP servers from the outbound ranges Anthropic publishes
+    | (https://platform.claude.com/docs/en/api/ip-addresses). Anthropic has
+    | no machine-readable list, so the ranges live here.
+    |
+    */
+
+    'mcp_claude_ip_ranges' => explode(',', env('MCP_CLAUDE_IP_RANGES', '160.79.104.0/21')),
 
     /*
     |--------------------------------------------------------------------------
@@ -176,7 +236,7 @@ return [
     | Post history retention
     |--------------------------------------------------------------------------
     |
-    | Published and partially published posts older than this many days are
+    | Published posts older than this many days are
     | deleted with their media by posts:prune-history. Must be 1 or more.
     |
     */

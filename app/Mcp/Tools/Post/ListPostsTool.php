@@ -17,9 +17,13 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
-#[IsReadOnly]
+#[IsReadOnly(true)]
+#[IsDestructive(false)]
+#[IsOpenWorld(false)]
 #[Description('List posts for the current workspace, ordered by scheduled date (newest first). Optional filters: status (draft|scheduled|pending_approval|published|failed), search (matches against post content), channels (social account IDs), labels (label IDs) with untagged (posts without labels), like the publish page filters. Unknown IDs match nothing. Paginated with the app page size: pass page; the response carries total, per_page, current_page and last_page.')]
 class ListPostsTool extends Tool
 {
@@ -58,7 +62,7 @@ class ListPostsTool extends Tool
                 RequestIds::uuidList(collect((array) data_get($validated, 'labels'))),
                 filter_var(data_get($validated, 'untagged'), FILTER_VALIDATE_BOOLEAN),
             )
-            ->with(['postPlatforms.socialAccount', 'user', 'approvalRequestedBy', 'approver', 'labels']);
+            ->with(['socialAccount', 'user', 'approvalRequestedBy', 'approver', 'labels']);
 
         $query = match (data_get($validated, 'status')) {
             Status::Draft->value => $query->draft(),
@@ -89,8 +93,8 @@ class ListPostsTool extends Tool
     {
         return [
             'status' => $schema->string()
-                ->enum(['draft', 'scheduled', 'published', 'failed', 'pending_approval'])
-                ->description('Filter by status. "published" includes partially-published posts.'),
+                ->enum([Status::Draft->value, Status::Scheduled->value, Status::Published->value, Status::Failed->value, Status::PendingApproval->value])
+                ->description('Filter by status.'),
             'search' => $schema->string()->description('Case-insensitive substring match against the post content.'),
             'channels' => $schema->array()->items($schema->string())->description('Only posts on one of these social account IDs (list-social-accounts-tool).'),
             'labels' => $schema->array()->items($schema->string())->description('Only posts with one of these label IDs.'),

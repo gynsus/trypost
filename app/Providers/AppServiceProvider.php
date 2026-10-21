@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
-use App\Listeners\StripeEventListener;
+use App\Actions\Mcp\ListChatGptEgressRanges;
 use App\Models\AccessToken;
 use App\Models\Account;
 use App\Models\AnalyticsAccountDailySnapshot;
 use App\Models\AnalyticsPublication;
 use App\Models\AnalyticsPublicationDailySnapshot;
 use App\Models\AnalyticsSyncState;
+use App\Models\ChangelogEntry;
+use App\Models\ChangelogEntryView;
 use App\Models\Idea;
 use App\Models\IdeaStage;
 use App\Models\Invite;
@@ -20,7 +22,6 @@ use App\Models\NotificationPreference;
 use App\Models\Plan;
 use App\Models\Post;
 use App\Models\PostNote;
-use App\Models\PostPlatform;
 use App\Models\PostTemplate;
 use App\Models\Repurpose;
 use App\Models\RepurposeItem;
@@ -57,7 +58,6 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 use Laravel\Cashier\Cashier;
-use Laravel\Cashier\Events\WebhookHandled;
 use Laravel\Nightwatch\Facades\Nightwatch;
 use Laravel\Nightwatch\Records\CacheEvent;
 use Laravel\Socialite\Facades\Socialite;
@@ -68,6 +68,7 @@ use SocialiteProviders\LinkedIn\LinkedInExtendSocialite;
 use SocialiteProviders\Manager\SocialiteWasCalled;
 use SocialiteProviders\Pinterest\PinterestExtendSocialite;
 use SocialiteProviders\TikTok\TikTokExtendSocialite;
+use Symfony\Component\HttpFoundation\IpUtils;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -92,7 +93,6 @@ class AppServiceProvider extends ServiceProvider
         $this->configurePostHog();
         $this->configureRateLimiting();
         $this->configureSocialite();
-        $this->configureStripeWebhooks();
 
         Cashier::useCustomerModel(Account::class);
         Cashier::useSubscriptionModel(Subscription::class);
@@ -109,6 +109,8 @@ class AppServiceProvider extends ServiceProvider
             'analyticsPublication' => AnalyticsPublication::class,
             'analyticsPublicationDailySnapshot' => AnalyticsPublicationDailySnapshot::class,
             'analyticsSyncState' => AnalyticsSyncState::class,
+            'changelogEntry' => ChangelogEntry::class,
+            'changelogEntryView' => ChangelogEntryView::class,
             'idea' => Idea::class,
             'ideaStage' => IdeaStage::class,
             'invite' => Invite::class,
@@ -123,7 +125,6 @@ class AppServiceProvider extends ServiceProvider
             'rssFeedCollection' => RssFeedCollection::class,
             'rssFeedItem' => RssFeedItem::class,
             'postComment' => PostNote::class,
-            'postPlatform' => PostPlatform::class,
             'postTemplate' => PostTemplate::class,
             'socialAccount' => SocialAccount::class,
             'subscription' => Subscription::class,
@@ -166,8 +167,11 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for(
-            'mcp-oauth-registration',
-            fn (Request $request): Limit => Limit::perMinute(30)->by($request->ip()),
+            'mcp-oauth',
+            fn (Request $request): Limit => $request->isMethodCacheable()
+                || IpUtils::checkIp((string) $request->ip(), [...ListChatGptEgressRanges::execute(), ...config()->array('trypost.mcp_claude_ip_ranges')])
+                    ? Limit::none()
+                    : Limit::perMinute(30)->by($request->ip()),
         );
 
         RateLimiter::for(
@@ -220,11 +224,6 @@ class AppServiceProvider extends ServiceProvider
 
             return $limits;
         });
-    }
-
-    protected function configureStripeWebhooks(): void
-    {
-        Event::listen(WebhookHandled::class, StripeEventListener::class);
     }
 
     protected function configureSocialite(): void

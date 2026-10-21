@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Enums\Post\PublishStatus;
 use App\Enums\PostPlatform\ContentType;
-use App\Enums\PostPlatform\Status as PostPlatformStatus;
 use App\Enums\Repurpose\ItemStatus;
 use App\Enums\Repurpose\PauseReason;
 use App\Enums\Repurpose\PublishMode;
@@ -15,7 +15,6 @@ use App\Enums\TikTok\PrivacyLevel;
 use App\Jobs\Analytics\BootstrapAccountAnalytics;
 use App\Jobs\Analytics\CollectAccountDailySnapshot;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\Repurpose;
 use App\Models\RepurposeItem;
 use App\Models\SocialAccount;
@@ -373,20 +372,17 @@ test('the api activity list carries each replicated post status', function () {
 
     $item = RepurposeItem::factory()->for($repurpose)->create();
 
-    $post = Post::factory()->create([
+    $post = Post::factory()->tiktok()->published()->create([
         'workspace_id' => $this->workspace->id,
         'repurpose_item_id' => $item->id,
-    ]);
-    PostPlatform::factory()->for($post)->create([
-        'platform' => Platform::TikTok,
-        'enabled' => true,
-        'status' => PostPlatformStatus::Published,
     ]);
 
     $this->withHeaders(apiHeaders($this->token))
         ->getJson(route('api.repurposes.items', $repurpose))
         ->assertOk()
-        ->assertJsonPath('data.0.posts.0.platforms.0.status', PostPlatformStatus::Published->value);
+        ->assertJsonPath('data.0.posts.0.id', $post->id)
+        ->assertJsonPath('data.0.posts.0.platform', Platform::TikTok->value)
+        ->assertJsonPath('data.0.posts.0.publish_status', PublishStatus::Published->value);
 });
 
 test('the source formats a repurpose can watch are listed', function () {
@@ -410,4 +406,21 @@ test('google business is rejected as a destination', function () {
         ])
         ->assertUnprocessable()
         ->assertJsonValidationErrors(['destinations.0.social_account_id' => __('repurposes.errors.destination_not_supported')]);
+});
+
+test('activating returns the same body when PostHog is enabled', function () {
+    enablePostHog();
+    Queue::fake();
+
+    $repurpose = Repurpose::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'source_social_account_id' => $this->source->id,
+        'destinations' => [tiktokDestinationPayload($this->tiktok)],
+    ]);
+
+    $this->withHeaders(apiHeaders($this->token))
+        ->postJson(route('api.repurposes.activate', $repurpose))
+        ->assertOk()
+        ->assertJsonPath('status', Status::Active->value)
+        ->assertJsonMissingPath('source_account');
 });

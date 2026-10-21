@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
+use App\Enums\Post\PublishStatus;
 use App\Enums\Post\ScheduleMode;
 use App\Enums\Post\Status;
-use App\Enums\PostPlatform\Status as PostPlatformStatus;
 use App\Mcp\Servers\TryPostServer;
 use App\Mcp\Tools\Post\CreatePostsTool;
 use App\Mcp\Tools\Post\CreatePostTool;
@@ -38,6 +38,7 @@ function fullPostRouter(): Closure
         $facebook = config('trypost.platforms.facebook.graph_api');
         $rupload = config('trypost.platforms.facebook.rupload_host');
         $instagram = config('trypost.platforms.instagram.graph_api');
+        $instagramFacebook = config('trypost.platforms.instagram-facebook.graph_api');
         $threads = config('trypost.platforms.threads.graph_api');
         $linkedin = config('trypost.platforms.linkedin.api');
         $pinterest = config('trypost.platforms.pinterest.api');
@@ -62,6 +63,9 @@ function fullPostRouter(): Closure
             str_starts_with($url, $instagram) && str_ends_with(parse_url($url, PHP_URL_PATH), '/media') => Http::response(['id' => "ig-container-{$counter}"], 200),
             str_starts_with($url, $instagram) && str_ends_with(parse_url($url, PHP_URL_PATH), '/media_publish') => Http::response(['id' => "ig-media-{$counter}"], 200),
             str_starts_with($url, $instagram) => Http::response(['status_code' => 'FINISHED', 'status' => 'Finished', 'permalink' => 'https://www.instagram.com/p/1/'], 200),
+            str_starts_with($url, "{$instagramFacebook}/igf_user/media_publish") => Http::response(['id' => "ig-media-{$counter}"], 200),
+            str_starts_with($url, "{$instagramFacebook}/igf_user/media") => Http::response(['id' => "ig-container-{$counter}"], 200),
+            str_starts_with($url, "{$instagramFacebook}/ig-") => Http::response(['status_code' => 'FINISHED', 'status' => 'Finished', 'permalink' => 'https://www.instagram.com/reel/1/'], 200),
             str_contains($url, $rupload) => Http::response(['success' => true], 200),
             str_starts_with($url, $facebook) && data_get($data, 'upload_phase') === 'start' => Http::response(['video_id' => "fb-video-{$counter}", 'upload_url' => "https://{$rupload}/video-upload/v25.0/fb-video-{$counter}"], 200),
             str_starts_with($url, $facebook) && data_get($data, 'upload_phase') === 'finish' => Http::response(['success' => true, 'id' => "fb-reel-{$counter}", 'post_id' => "fb-story-{$counter}"], 200),
@@ -247,14 +251,25 @@ function fullPostCase(string $name): array
                 ['upload_token' => fullPostImage()->upload_token, 'alt' => 'First alt', 'meta' => ['user_tags' => [['username' => 'friend.one', 'x' => 0.25, 'y' => 0.75]]]],
                 ['upload_token' => fullPostImage()->upload_token, 'alt' => 'Second alt'],
             ],
-            'meta' => ['is_ai_generated' => true],
+            'meta' => ['is_ai_generated' => true, 'collaborators' => ['@friend.two']],
         ],
         'instagram reel' => [
             'account' => $account('instagram', ['platform_user_id' => 'ig_user']),
             'content_type' => 'instagram_reel',
             'content' => 'Reel caption',
             'media' => [['upload_token' => fullPostVideo()->upload_token, 'meta' => ['cover_offset_ms' => 3500]]],
-            'meta' => ['is_ai_generated' => true, 'share_to_feed' => false],
+            'meta' => ['is_ai_generated' => true, 'share_to_feed' => false, 'trial_graduation' => 'SS_PERFORMANCE'],
+        ],
+        'instagram via facebook reel with music' => [
+            'account' => $account('instagram', [
+                'platform' => 'instagram-facebook',
+                'platform_user_id' => 'igf_user',
+                'scopes' => ['instagram_basic', 'instagram_content_publish', 'pages_read_engagement'],
+            ]),
+            'content_type' => 'instagram_reel',
+            'content' => 'Reel with music',
+            'media' => [['upload_token' => fullPostVideo()->upload_token]],
+            'meta' => ['collaborators' => ['friend.three'], 'audio' => ['id' => '1122334455', 'title' => 'Song', 'audio_volume' => 100, 'video_volume' => 0]],
         ],
         'instagram story' => [
             'account' => $account('instagram', ['platform_user_id' => 'ig_user']),
@@ -354,7 +369,6 @@ function fullPostCase(string $name): array
             'media' => [['upload_token' => fullPostImage()->upload_token, 'alt' => 'Discord alt']],
             'meta' => [
                 'channel_id' => '444555666',
-                'channel_name' => 'general',
                 'mentions' => [['token' => '@everyone', 'label' => 'everyone']],
                 'embeds' => [['title' => 'Embed title', 'description' => 'Embed body', 'url' => 'https://example.com', 'image' => 'https://example.com/i.png', 'color' => '#FF8800']],
             ],
@@ -456,7 +470,9 @@ function fullPostPayload(array $case, string $status, string $labelId): array
         'scheduled_at' => $status === 'scheduled' ? now()->addHour()->toIso8601String() : null,
         'label_ids' => [$labelId],
         'media' => $case['media'],
-        'platforms' => [['social_account_id' => $case['account']->id, 'content_type' => $case['content_type'], 'meta' => $case['meta']]],
+        'social_account_id' => $case['account']->id,
+        'content_type' => $case['content_type'],
+        'meta' => $case['meta'],
     ];
 }
 
@@ -746,6 +762,7 @@ function fullPostExpected(string $name): array
                     'caption' => 'Carousel caption #one',
                     'children' => 'ig-container-#,ig-container-#',
                     'is_ai_generated' => 'true',
+                    'collaborators' => '["friend.two"]',
                 ],
             ],
             [
@@ -767,11 +784,33 @@ function fullPostExpected(string $name): array
                     'thumb_offset' => 3500,
                     'is_ai_generated' => 'true',
                     'share_to_feed' => 'false',
+                    'trial_params' => '{"graduation_strategy":"SS_PERFORMANCE"}',
                 ],
             ],
             [
                 'POST',
                 'https://graph.instagram.com/v25.0/ig_user/media_publish',
+                [
+                    'creation_id' => 'ig-container-#',
+                ],
+            ],
+        ],
+        'instagram via facebook reel with music' => [
+            [
+                'POST',
+                'https://graph.facebook.com/v25.0/igf_user/media',
+                [
+                    'video_url' => '/storage/media/{month}/{uuid}.mp4',
+                    'caption' => 'Reel with music',
+                    'media_type' => 'REELS',
+                    'collaborators' => '["friend.three"]',
+                    'share_to_feed' => 'true',
+                    'audio_configuration' => '{"audio_id":"1122334455","audio_volume":100,"video_volume":0}',
+                ],
+            ],
+            [
+                'POST',
+                'https://graph.facebook.com/v25.0/igf_user/media_publish',
                 [
                     'creation_id' => 'ig-container-#',
                 ],
@@ -1246,6 +1285,7 @@ dataset('complete posts', [
     'threads ghost post',
     'instagram carousel',
     'instagram reel',
+    'instagram via facebook reel with music',
     'instagram story',
     'facebook post',
     'facebook link without preview',
@@ -1274,7 +1314,7 @@ test('a complete post published now through the api and through mcp reaches the 
 
     $post = fullPostCreate($surface, fullPostPayload(fullPostCase($name), 'publishing', $label->id));
 
-    expect($post->postPlatforms()->sole()->status)->toBe(PostPlatformStatus::Published)
+    expect($post->fresh()->publish_status)->toBe(PublishStatus::Published)
         ->and($post->labels()->pluck('workspace_labels.id')->all())->toBe([$label->id])
         ->and(fullPostPublished())->toEqual(fullPostExpected($name));
 })->with('complete posts')->with('surfaces');
@@ -1292,7 +1332,7 @@ test('a complete post scheduled through the api and through mcp reaches the netw
     $this->travel(61)->minutes();
     $this->artisan('posts:process-scheduled')->assertSuccessful();
 
-    expect($post->postPlatforms()->sole()->status)->toBe(PostPlatformStatus::Published)
+    expect($post->fresh()->publish_status)->toBe(PublishStatus::Published)
         ->and(fullPostPublished())->toEqual(fullPostExpected($name));
 })->with('complete posts')->with('surfaces');
 
@@ -1300,7 +1340,7 @@ test('a draft completed and published through api and mcp updates reaches the ne
     fullPostFake();
     $label = WorkspaceLabel::factory()->create(['workspace_id' => $this->workspace->id]);
     $case = fullPostCase($name);
-    $post = fullPostCreate($surface, [...fullPostPayload($case, 'draft', $label->id), 'platforms' => [['social_account_id' => $case['account']->id, 'content_type' => $case['content_type']]]]);
+    $post = fullPostCreate($surface, Arr::except(fullPostPayload($case, 'draft', $label->id), ['meta']));
 
     if ($surface === 'api') {
         $this->withHeaders(parityApi($this->token))
@@ -1311,7 +1351,7 @@ test('a draft completed and published through api and mcp updates reaches the ne
         TryPostServer::actingAs($this->user)->tool(PublishPostTool::class, ['post_id' => $post->id])->assertOk();
     }
 
-    expect($post->postPlatforms()->sole()->status)->toBe(PostPlatformStatus::Published)
+    expect($post->fresh()->publish_status)->toBe(PublishStatus::Published)
         ->and(fullPostPublished())->toEqual(fullPostExpected($name));
 })->with('complete posts')->with('surfaces');
 
@@ -1331,9 +1371,9 @@ test('a complete post reads back every setting the same way through the api and 
     $replies = data_get($meta, 'thread_replies');
     unset($meta['thread_replies']);
 
-    expect(data_get($api, 'platforms.0.content_type'))->toBe($case['content_type'])
-        ->and(Arr::except(data_get($api, 'platforms.0.meta'), ['thread_replies']))->toEqual($meta)
-        ->and(collect(data_get($api, 'platforms.0.meta.thread_replies', []))->pluck('text')->all())->toBe(collect($replies ?? [])->pluck('text')->all())
+    expect(data_get($api, 'content_type'))->toBe($case['content_type'])
+        ->and(Arr::except(data_get($api, 'meta'), ['thread_replies']))->toEqual($meta)
+        ->and(collect(data_get($api, 'meta.thread_replies', []))->pluck('text')->all())->toBe(collect($replies ?? [])->pluck('text')->all())
         ->and(data_get($api, 'labels.0.id'))->toBe($label->id)
         ->and(data_get($api, 'content'))->toBe($case['content'])
         ->and(collect(data_get($api, 'media'))->map(fn (array $item): array => Arr::only((array) data_get($item, 'meta'), ['alt_text', 'user_tags', 'cover_offset_ms']))->all())
@@ -1378,8 +1418,8 @@ test('a batch with per-network caption, media and settings reaches each network 
 
 test('every per-platform setting the rules accept is documented for mcp clients', function () {
     $keys = collect(array_keys(PostPlatformMetaRules::rules()))
-        ->filter(fn (string $key): bool => str_starts_with($key, 'platforms.*.meta.'))
-        ->map(fn (string $key): string => explode('.', substr($key, strlen('platforms.*.meta.')))[0])
+        ->filter(fn (string $key): bool => str_starts_with($key, 'meta.'))
+        ->map(fn (string $key): string => explode('.', substr($key, strlen('meta.')))[0])
         ->unique()
         ->values();
 
@@ -1394,7 +1434,7 @@ test('every mcp tool that takes per-platform settings describes all of them', fu
     expect(data_get((new $tool)->toArray(), "inputSchema.properties.{$path}.description"))
         ->toContain(PostPlatformMetaRules::documentation());
 })->with([
-    'create-post-tool' => [CreatePostTool::class, 'platforms.items.properties.meta'],
+    'create-post-tool' => [CreatePostTool::class, 'meta'],
     'create-posts-tool' => [CreatePostsTool::class, 'destinations.items.properties.meta'],
     'update-post-tool' => [UpdatePostTool::class, 'meta'],
 ]);

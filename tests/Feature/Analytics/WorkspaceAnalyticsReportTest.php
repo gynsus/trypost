@@ -18,7 +18,6 @@ use App\Models\AnalyticsPublication;
 use App\Models\AnalyticsPublicationDailySnapshot;
 use App\Models\AnalyticsSyncState;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\Workspace;
 use App\Support\Analytics\PeriodBuckets;
@@ -145,13 +144,9 @@ test('workspace report keeps accounts separate and aggregates only latest normal
 test('top posts include the source post id for TryPost publications', function () {
     $workspace = Workspace::factory()->create();
     $account = analyticsReportAccount($workspace, Platform::Instagram);
-    $post = Post::factory()->published()->create(['workspace_id' => $workspace->id]);
-    $destination = PostPlatform::factory()->instagram()->published()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $account->id,
-    ]);
+    $post = Post::factory()->forAccount($account)->published()->create();
     $publication = analyticsReportPublication($account, '2026-09-05 10:00:00', 5, 1, 6, 100);
-    $publication->update(['post_platform_id' => $destination->id]);
+    $publication->update(['post_id' => $post->id]);
 
     $report = app(BuildWorkspaceAnalyticsReport::class)->execute(
         $workspace,
@@ -159,6 +154,33 @@ test('top posts include the source post id for TryPost publications', function (
     );
 
     expect($report['top_posts']['reactions'][0]['post_id'])->toBe($post->id);
+});
+
+test('top posts carry the post media from our bucket instead of the network preview', function () {
+    $workspace = Workspace::factory()->create();
+    $account = analyticsReportAccount($workspace, Platform::Instagram);
+    $video = ['id' => 'video', 'path' => 'medias/reel.mp4', 'url' => 'https://cdn.trypost.test/medias/reel.mp4', 'type' => 'video', 'mime_type' => 'video/mp4', 'meta' => ['cover_offset_ms' => 1500]];
+    $document = ['id' => 'document', 'path' => 'medias/deck.pdf', 'url' => 'https://cdn.trypost.test/medias/deck.pdf', 'type' => 'document', 'mime_type' => 'application/pdf'];
+    $post = Post::factory()->forAccount($account)->published()->create(['media' => [$document, $video]]);
+    $other = Post::factory()->forAccount($account)->published()->create(['media' => [$video]]);
+    $linked = analyticsReportPublication($account, '2026-09-05 10:00:00', 9, 1, 10, 100);
+    $linked->update(['post_id' => $post->id, 'preview_metadata' => ['thumbnail_url' => 'https://scontent.cdninstagram.com/expired.jpg?oe=6ACC450F']]);
+    $commented = analyticsReportPublication($account, '2026-09-06 10:00:00', 1, 9, 10, 100);
+    $commented->update(['post_id' => $other->id]);
+    $external = analyticsReportPublication($account, '2026-09-07 10:00:00', 5, 5, 10, 100);
+    $external->update(['preview_metadata' => ['thumbnail_url' => 'https://pbs.twimg.com/media/external.jpg']]);
+
+    $report = app(BuildWorkspaceAnalyticsReport::class)->execute(
+        $workspace,
+        new DateRange(CarbonImmutable::parse('2026-09-01', 'UTC'), CarbonImmutable::parse('2026-09-10', 'UTC')),
+    );
+    $reactions = collect($report['top_posts']['reactions'])->keyBy('id');
+    $comments = collect($report['top_posts']['comments'])->keyBy('id');
+
+    expect($reactions[$linked->id]['media'])->toMatchArray(['url' => $video['url'], 'type' => 'video', 'meta' => ['cover_offset_ms' => 1500]])
+        ->and($comments[$commented->id]['media'])->toMatchArray(['url' => $video['url'], 'type' => 'video'])
+        ->and($reactions[$external->id]['media'])->toBeNull()
+        ->and($reactions[$external->id]['preview_metadata']['thumbnail_url'])->toBe('https://pbs.twimg.com/media/external.jpg');
 });
 
 test('workspace follower total stays unavailable until every connected account has an observation', function () {
@@ -324,16 +346,12 @@ test('publication detail uses the latest persisted metric snapshot without provi
     Http::fake();
     $workspace = Workspace::factory()->create();
     $account = analyticsReportAccount($workspace, Platform::Instagram);
-    $post = Post::factory()->create(['workspace_id' => $workspace->id]);
-    $destination = PostPlatform::factory()->instagram()->published()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $account->id,
-    ]);
+    $post = Post::factory()->forAccount($account)->published()->create();
     $publication = AnalyticsPublication::factory()->create([
         'workspace_id' => $workspace->id,
         'social_account_id' => $account->id,
         'social_account_key' => $account->id,
-        'post_platform_id' => $destination->id,
+        'post_id' => $post->id,
         'platform' => Platform::Instagram,
         'content_type' => PublicationContentType::Reel,
     ]);
@@ -354,7 +372,7 @@ test('publication detail uses the latest persisted metric snapshot without provi
         ],
     ]);
 
-    $detail = app(ReadPublicationAnalytics::class)->latestForPostPlatform($destination);
+    $detail = app(ReadPublicationAnalytics::class)->latestFor($post);
 
     expect($detail['available'])->toBeTrue()
         ->and($detail['publication']['content_type'])->toBe('reel')
@@ -367,21 +385,17 @@ test('publication detail uses the latest persisted metric snapshot without provi
 test('publication detail remains scoped to the post workspace and excludes unsupported networks', function () {
     $workspace = Workspace::factory()->create();
     $foreign = analyticsReportAccount(Workspace::factory()->create(), Platform::Instagram);
-    $post = Post::factory()->create(['workspace_id' => $workspace->id]);
-    $destination = PostPlatform::factory()->instagram()->published()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $foreign->id,
-    ]);
+    $post = Post::factory()->forAccount($foreign)->published()->create(['workspace_id' => $workspace->id]);
     AnalyticsPublication::factory()->create([
         'workspace_id' => $foreign->workspace_id,
-        'post_platform_id' => $destination->id,
+        'post_id' => $post->id,
         'platform' => Platform::Instagram,
     ]);
 
-    expect(app(ReadPublicationAnalytics::class)->latestForPostPlatform($destination)['available'])->toBeFalse();
+    expect(app(ReadPublicationAnalytics::class)->latestFor($post)['available'])->toBeFalse();
 
-    $destination->update(['platform' => Platform::LinkedIn]);
-    expect(app(ReadPublicationAnalytics::class)->latestForPostPlatform($destination)['reason'])->toBe('platform_not_supported');
+    $post->update(['platform' => Platform::LinkedIn]);
+    expect(app(ReadPublicationAnalytics::class)->latestFor($post)['reason'])->toBe('platform_not_supported');
 });
 
 test('external YouTube upload stays a video and not a short without authoritative metadata', function () {
