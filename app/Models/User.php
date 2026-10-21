@@ -6,12 +6,18 @@ namespace App\Models;
 
 use App\Enums\Auth\SocialAuthProvider;
 use App\Enums\Notification\Type as NotificationType;
+use App\Enums\User\DefaultPostAction;
 use App\Enums\User\Locale;
 use App\Enums\User\Persona;
+use App\Enums\User\PreviousSoftware;
 use App\Enums\User\ReferralSource;
+use App\Enums\User\Theme;
+use App\Enums\User\TimeFormat;
+use App\Enums\User\WeekStart;
 use App\Models\Traits\HasAccount;
 use App\Models\Traits\HasMedia;
 use App\Models\Traits\HasWorkspace;
+use App\Models\Traits\SyncsStripeCustomer;
 use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Contracts\Translation\HasLocalePreference;
@@ -19,8 +25,9 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
-use Illuminate\Notifications\Notifiable;
+use Illuminate\Notifications\RoutesNotifications;
 use Illuminate\Support\Str;
 use Laravel\Passport\Contracts\OAuthenticatable;
 use Laravel\Passport\HasApiTokens;
@@ -28,7 +35,7 @@ use Laravel\Passport\HasApiTokens;
 class User extends Authenticatable implements HasLocalePreference, MustVerifyEmail, OAuthenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasAccount, HasApiTokens, HasFactory, HasMedia, HasUuids, HasWorkspace, Notifiable;
+    use HasAccount, HasApiTokens, HasFactory, HasMedia, HasUuids, HasWorkspace, RoutesNotifications, SyncsStripeCustomer;
 
     /**
      * @var list<string>
@@ -56,8 +63,24 @@ class User extends Authenticatable implements HasLocalePreference, MustVerifyEma
         'registration_ip',
         'persona',
         'goals',
+        'previous_software',
         'referral_source',
         'locale',
+        'timezone',
+        'theme',
+        'time_format',
+        'week_starts_on',
+        'default_post_action',
+    ];
+
+    /**
+     * @var array<string, mixed>
+     */
+    protected $attributes = [
+        'theme' => Theme::DEFAULT->value,
+        'time_format' => TimeFormat::DEFAULT->value,
+        'week_starts_on' => WeekStart::DEFAULT->value,
+        'default_post_action' => DefaultPostAction::DEFAULT->value,
     ];
 
     /**
@@ -75,14 +98,24 @@ class User extends Authenticatable implements HasLocalePreference, MustVerifyEma
         'photo_url',
     ];
 
+    public function avatarMedia(): MorphOne
+    {
+        return $this->morphOne(Media::class, 'mediable')->where('collection', 'avatar')->orderBy('order');
+    }
+
     public function getHasPhotoAttribute(): bool
     {
-        return $this->getFirstMedia('avatar') !== null;
+        return $this->resolveAvatar() !== null;
     }
 
     public function getPhotoUrlAttribute(): ?string
     {
-        return $this->getFirstMediaUrl('avatar');
+        return $this->resolveAvatar()?->url;
+    }
+
+    private function resolveAvatar(): ?Media
+    {
+        return $this->relationLoaded('avatarMedia') ? $this->avatarMedia : $this->getFirstMedia('avatar');
     }
 
     /**
@@ -101,8 +134,13 @@ class User extends Authenticatable implements HasLocalePreference, MustVerifyEma
             'two_factor_confirmed_at' => 'datetime',
             'persona' => Persona::class,
             'goals' => 'array',
+            'previous_software' => PreviousSoftware::class,
             'referral_source' => ReferralSource::class,
             'locale' => Locale::class,
+            'theme' => Theme::class,
+            'time_format' => TimeFormat::class,
+            'week_starts_on' => WeekStart::class,
+            'default_post_action' => DefaultPostAction::class,
         ];
     }
 
@@ -111,35 +149,47 @@ class User extends Authenticatable implements HasLocalePreference, MustVerifyEma
         return $this->locale->value;
     }
 
-    public function notifications(): HasMany
-    {
-        return $this->hasMany(Notification::class);
-    }
-
     public function notificationPreference(): HasOne
     {
         return $this->hasOne(NotificationPreference::class);
+    }
+
+    public function mediaSourceConnections(): HasMany
+    {
+        return $this->hasMany(MediaSourceConnection::class);
     }
 
     public function wantsEmailFor(NotificationType $type): bool
     {
         $preference = $this->notificationPreference;
 
-        if (! $preference) {
-            return true;
-        }
-
         return match ($type) {
-            NotificationType::PostPublished => $preference->post_published,
-            NotificationType::PostFailed, NotificationType::PostPartiallyPublished => $preference->post_failed,
-            NotificationType::AccountDisconnected, NotificationType::PostAtRisk => $preference->account_disconnected,
-            NotificationType::MentionedInComment => $preference->mentioned_in_comment ?? true,
-            default => true,
+            NotificationType::PostReady, NotificationType::MentionedInComment => false,
+            NotificationType::PostPublished => $preference->post_published ?? true,
+            NotificationType::PostFailed => $preference->post_failed ?? true,
+            NotificationType::AccountDisconnected, NotificationType::PostAtRisk => $preference->account_disconnected ?? true,
+            NotificationType::PostNoteAdded => $preference->post_note_added ?? true,
+            NotificationType::Collaboration => $preference->collaboration ?? true,
         };
     }
 
     public function isConnectedTo(SocialAuthProvider $provider): bool
     {
         return (bool) $this->{"{$provider->value}_id"};
+    }
+
+    /**
+     * Whether unlinking this provider still leaves the user a way to sign in:
+     * a password or another connected provider.
+     */
+    public function canDisconnectFrom(SocialAuthProvider $provider): bool
+    {
+        if ($this->password) {
+            return true;
+        }
+
+        return collect(SocialAuthProvider::cases())
+            ->reject(fn (SocialAuthProvider $other): bool => $other === $provider)
+            ->contains(fn (SocialAuthProvider $other): bool => $this->isConnectedTo($other));
     }
 }

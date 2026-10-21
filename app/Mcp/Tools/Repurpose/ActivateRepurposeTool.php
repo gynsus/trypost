@@ -18,7 +18,13 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
+#[IsReadOnly(false)]
+#[IsDestructive(true)]
+#[IsOpenWorld(true)]
 #[Description('Activate a repurpose. Requires at least one destination and stamps the watermark, so only videos published from now on are replicated.')]
 class ActivateRepurposeTool extends Tool
 {
@@ -26,7 +32,7 @@ class ActivateRepurposeTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace($request, 'manageRepurposes', 'Not authorized to manage repurposes.');
+        $workspace = $this->currentWorkspace($request);
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
@@ -37,6 +43,10 @@ class ActivateRepurposeTool extends Tool
 
         if (! $repurpose instanceof Repurpose) {
             return $repurpose;
+        }
+
+        if ($denied = $this->denyUnlessCan($request, 'update', $repurpose, 'Repurpose not found.')) {
+            return $denied;
         }
 
         try {

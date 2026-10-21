@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use App\Enums\UserWorkspace\Role;
 use App\Http\Middleware\App\EnsureCanAuthorizeMcp;
 use App\Models\Account;
 use App\Models\User;
@@ -61,6 +60,60 @@ test('dynamic oauth client registration is rate limited', function () {
 
     $this->postJson('/oauth/register', $payload)->assertTooManyRequests();
 });
+
+test('dynamic oauth client registration is not rate limited from chatgpt or claude', function (string $ip) {
+    fakeChatGptEgressRanges(['203.0.113.0/24']);
+
+    $payload = [
+        'client_name' => 'MCP Client',
+        'redirect_uris' => ['https://client.example/callback'],
+        'grant_types' => ['authorization_code'],
+        'response_types' => ['code'],
+        'token_endpoint_auth_method' => 'none',
+    ];
+
+    for ($attempt = 0; $attempt < 31; $attempt++) {
+        $this->withServerVariables(['REMOTE_ADDR' => $ip])
+            ->postJson('/oauth/register', $payload)
+            ->assertSuccessful();
+    }
+})->with([
+    'chatgpt' => '203.0.113.5',
+    'claude' => '160.79.104.10',
+]);
+
+test('oauth discovery metadata is never rate limited', function (string $routeName, array $parameters) {
+    for ($attempt = 0; $attempt < 31; $attempt++) {
+        $this->getJson(route($routeName, $parameters))->assertSuccessful();
+    }
+})->with([
+    'protected resource' => ['mcp.oauth.protected-resource', []],
+    'nested protected resource' => ['mcp.oauth.protected-resource.nested', ['path' => 'mcp/trypost']],
+    'authorization server' => ['mcp.oauth.authorization-server', []],
+    'nested authorization server' => ['mcp.oauth.authorization-server.nested', ['path' => 'mcp/trypost']],
+]);
+
+test('oauth discovery advertises the authentication method used by public clients', function (string $routeName, array $parameters) {
+    $registration = $this->postJson(route('mcp.oauth.register'), [
+        'client_name' => 'Discovery Test Client',
+        'redirect_uris' => ['https://client.example/callback'],
+        'grant_types' => ['authorization_code'],
+        'response_types' => ['code'],
+        'token_endpoint_auth_method' => 'none',
+    ])->assertCreated()->assertJsonPath('token_endpoint_auth_method', 'none');
+
+    $metadata = $this->getJson(route($routeName, $parameters))
+        ->assertOk()
+        ->assertJsonPath('token_endpoint', route('passport.token'))
+        ->assertJsonPath('registration_endpoint', route('mcp.oauth.register'));
+
+    expect($metadata->json('token_endpoint_auth_methods_supported'))
+        ->toBeArray()
+        ->toContain($registration->json('token_endpoint_auth_method'));
+})->with([
+    'authorization server' => ['mcp.oauth.authorization-server', []],
+    'nested authorization server' => ['mcp.oauth.authorization-server.nested', ['path' => 'mcp/trypost']],
+]);
 
 test('mcp custom schemes config lists every supported native agent', function () {
     expect(config('mcp.custom_schemes'))->toEqual(mcpNativeAgentSchemes());
@@ -129,37 +182,37 @@ test('dynamic oauth registration accepts extra custom schemes from config', func
     ])->assertCreated();
 });
 
-test('mcp oauth consent page is available for workspace viewers', function () {
+test('mcp oauth consent page is available for members who need approval', function () {
     $account = Account::factory()->create();
     $owner = User::factory()->create(['account_id' => $account->id]);
     $account->update(['owner_id' => $owner->id]);
     $workspace = Workspace::factory()->create([
         'account_id' => $account->id,
         'user_id' => $owner->id,
-        'name' => 'Viewer Workspace',
+        'name' => 'Requester Workspace',
     ]);
-    $workspace->members()->attach($owner->id, ['role' => Role::Admin->value]);
+    $workspace->members()->attach($owner->id, membershipPivot('admin'));
 
-    $viewer = User::factory()->create(['account_id' => $account->id]);
-    $workspace->members()->attach($viewer->id, ['role' => Role::Viewer->value]);
-    $viewer->update(['current_workspace_id' => $workspace->id]);
+    $requester = User::factory()->create(['account_id' => $account->id]);
+    $workspace->members()->attach($requester->id, membershipPivot('approval'));
+    $requester->update(['current_workspace_id' => $workspace->id]);
 
-    $clientId = mcpOauthClient('Viewer Agent');
+    $clientId = mcpOauthClient('Requester Agent');
     DB::table('oauth_clients')->where('id', $clientId)->update([
         'redirect_uris' => json_encode(['https://client.example/callback']),
     ]);
 
-    $this->actingAs($viewer)
+    $this->actingAs($requester)
         ->get(route('passport.authorizations.authorize', oauthAuthorizeQuery($clientId)))
         ->assertOk()
         ->assertInertia(fn ($page) => $page
             ->component('mcp/Authorize')
-            ->where('client.name', 'Viewer Agent')
-            ->where('user.email', $viewer->email)
+            ->where('client.name', 'Requester Agent')
+            ->where('user.email', $requester->email)
             ->where('selectedWorkspaceId', (string) $workspace->id)
             ->has('workspaces', 1)
             ->where('workspaces.0.id', (string) $workspace->id)
-            ->where('workspaces.0.name', 'Viewer Workspace')
+            ->where('workspaces.0.name', 'Requester Workspace')
             ->has('scopes', 1)
             ->where('scopes.0.id', 'mcp:use')
             ->has('authToken')
@@ -194,8 +247,8 @@ test('mcp oauth consent page lists every workspace the user can access', functio
         'user_id' => $user->id,
         'name' => 'Beta',
     ]);
-    $alpha->members()->attach($user->id, ['role' => Role::Admin->value]);
-    $beta->members()->attach($user->id, ['role' => Role::Admin->value]);
+    $alpha->members()->attach($user->id, membershipPivot('admin'));
+    $beta->members()->attach($user->id, membershipPivot('admin'));
     $user->update(['current_workspace_id' => $alpha->id]);
 
     $clientId = mcpOauthClient('Claude');
@@ -224,7 +277,7 @@ test('mcp oauth always shows consent even when scopes were previously granted', 
         'account_id' => $account->id,
         'user_id' => $user->id,
     ]);
-    $workspace->members()->attach($user->id, ['role' => Role::Admin->value]);
+    $workspace->members()->attach($user->id, membershipPivot('admin'));
     $user->update(['current_workspace_id' => $workspace->id]);
 
     $clientId = mcpOauthClient('Reconnect Agent');

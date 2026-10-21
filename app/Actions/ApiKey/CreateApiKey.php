@@ -4,41 +4,33 @@ declare(strict_types=1);
 
 namespace App\Actions\ApiKey;
 
+use App\Enums\PostHog\ApiKeyEvent;
+use App\Jobs\PostHog\CaptureAccountEvent;
 use App\Models\AccessToken;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Services\PostHogService;
 
 class CreateApiKey
 {
-    /**
-     * @return list<string>
-     */
-    public static function expiresAtRules(): array
-    {
-        return ['nullable', 'date', 'after_or_equal:today'];
-    }
-
     /**
      * @param  array{name: string, expires_at?: string|null}  $data
      * @return array{token: AccessToken, plain_token: string}
      */
     public static function execute(User $user, Workspace $workspace, array $data): array
     {
-        $result = $user->createToken(data_get($data, 'name'));
-        $token = AccessToken::query()->findOrFail($result->token->id);
-        $expiresAt = data_get($data, 'expires_at');
+        $created = IssueApiKey::execute($user, $workspace, $data);
 
-        $token->forceFill([
-            'workspace_id' => $workspace->id,
-            // Empty = never expire (overrides Passport's JWT default lifetime in the DB).
-            'expires_at' => filled($expiresAt)
-                ? now()->parse($expiresAt)->endOfDay()
-                : null,
-        ])->saveQuietly();
+        rescue(function () use ($user, $workspace): void {
+            CaptureAccountEvent::dispatchIf(
+                PostHogService::isEnabled(),
+                (string) $user->id,
+                (string) $workspace->account_id,
+                ApiKeyEvent::Created,
+                ['workspace_id' => (string) $workspace->id],
+            );
+        });
 
-        return [
-            'token' => $token->refresh(),
-            'plain_token' => $result->accessToken,
-        ];
+        return $created;
     }
 }

@@ -6,22 +6,17 @@ use App\Actions\Billing\StartSubscriptionCheckout;
 use App\Enums\Plan\Slug;
 use App\Enums\PostHog\CheckoutEvent;
 use App\Enums\PostHog\WelcomeEvent;
-use App\Enums\SocialAccount\Platform as SocialPlatform;
-use App\Enums\SocialAccount\Status;
 use App\Enums\User\Goal;
+use App\Enums\User\Locale;
 use App\Enums\User\Persona;
-use App\Enums\User\ReferralSource;
-use App\Enums\UserWorkspace\Role;
-use App\Enums\Workspace\ContentLanguage;
+use App\Enums\User\PreviousSoftware;
 use App\Jobs\PostHog\SendEvent;
 use App\Models\Account;
 use App\Models\Plan;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
-use App\Services\PostHogService;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Route;
 
 beforeEach(function () {
@@ -102,16 +97,16 @@ test('goals requires at least one valid goal', function (array $goals, string $e
     'invalid' => [['not-a-goal'], 'goals.0'],
 ]);
 
-test('goals store saves choices mirrors them to PostHog and advances to referral source', function () {
+test('goals store saves choices mirrors them to PostHog and advances to software', function () {
     config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
     Bus::fake();
     $this->user->update(['persona' => Persona::Creator->value]);
 
-    $goals = [Goal::AiContent->value, Goal::SaveTime->value];
+    $goals = [Goal::UseMcp->value, Goal::SaveTime->value];
 
     $this->actingAs($this->user->fresh())
         ->post(route('app.welcome.goals.store'), ['goals' => $goals])
-        ->assertRedirect(route('app.welcome.referral-source'));
+        ->assertRedirect(route('app.welcome.software'));
 
     expect($this->user->fresh()->goals)->toBe($goals);
     Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'capture'
@@ -119,12 +114,320 @@ test('goals store saves choices mirrors them to PostHog and advances to referral
         && data_get($event->payload, 'properties.goals') === $goals);
 });
 
+test('software redirects to goals until a goal is selected', function () {
+    $this->user->update(['persona' => Persona::Agency->value]);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.software'))
+        ->assertRedirect(route('app.welcome.goals'));
+});
+
+test('software renders after goals are selected', function () {
+    completeWelcomeThroughGoals($this->user);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.software'))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('welcome/Software', false)
+            ->has('software', count(PreviousSoftware::cases()))
+            ->where('software.0', ['value' => 'buffer', 'name' => 'Buffer'])
+            ->where('software.10', ['value' => 'none', 'name' => null])
+            ->where('selected', null)
+        );
+});
+
+test('software requires a valid selection', function (array $payload) {
+    completeWelcomeThroughGoals($this->user);
+
+    $this->actingAs($this->user->fresh())
+        ->post(route('app.welcome.software.store'), $payload)
+        ->assertSessionHasErrors('previous_software');
+
+    expect($this->user->fresh()->previous_software)->toBeNull();
+})->with([
+    'missing' => [[]],
+    'invalid' => [['previous_software' => 'not-a-tool']],
+]);
+
+test('software store saves the selection, mirrors it to PostHog and advances to plan', function (PreviousSoftware $software) {
+    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
+    Bus::fake();
+    completeWelcomeThroughGoals($this->user);
+    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
+
+    $this->actingAs($this->user->fresh())
+        ->post(route('app.welcome.software.store'), ['previous_software' => $software->value])
+        ->assertRedirect(route('app.welcome.plan'));
+
+    expect($this->user->fresh()->previous_software)->toBe($software);
+    Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'identify'
+        && data_get($event->payload, 'properties.previous_software') === $software->value);
+    Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'capture'
+        && data_get($event->payload, 'event') === WelcomeEvent::Software->value
+        && data_get($event->payload, 'properties.previous_software') === $software->value);
+})->with([
+    'a competitor' => [PreviousSoftware::Metricool],
+    'no tool yet' => [PreviousSoftware::None],
+]);
+
+test('plan redirects to software until a tool is selected', function () {
+    completeWelcomeThroughGoals($this->user);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.plan'))
+        ->assertRedirect(route('app.welcome.software'));
+
+    $this->actingAs($this->user->fresh())
+        ->post(route('app.welcome.plan.store'))
+        ->assertRedirect(route('app.welcome.software'));
+});
+
+test('plan shows the Socials plan', function () {
+    completeWelcomeThroughSoftware($this->user);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.plan'))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('welcome/Plan', false)
+            ->where('plan.slug', Slug::Socials->value)
+            ->where('plan.workspace_limit', 1)
+        );
+});
+
+test('plan offers the first month only when checkout will apply the coupon', function (Closure $setup, bool $offered) {
+    config(['cashier.first_month_coupon_ids.socials' => 'coupon_socials']);
+    completeWelcomeThroughSoftware($this->user);
+    $setup($this->user);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.plan'))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page->where('firstMonthOffer', $offered));
+})->with([
+    'first-time subscriber' => [fn () => null, true],
+    'retrying an incomplete checkout' => [fn (User $user) => $user->account->subscriptions()->create([
+        'type' => Account::SUBSCRIPTION_NAME,
+        'stripe_id' => 'sub_incomplete',
+        'stripe_status' => 'incomplete',
+        'stripe_price' => 'price_monthly_test',
+        'quantity' => 1,
+    ]), true],
+    'former subscriber' => [fn (User $user) => $user->account->subscriptions()->create([
+        'type' => Account::SUBSCRIPTION_NAME,
+        'stripe_id' => 'sub_canceled',
+        'stripe_status' => 'canceled',
+        'stripe_price' => 'price_monthly_test',
+        'quantity' => 1,
+        'ends_at' => now()->subDay(),
+    ]), false],
+    'no coupon configured' => [fn () => config(['cashier.first_month_coupon_ids.socials' => '']), false],
+]);
+
+test('plan store sends the owner to Stripe checkout on the Socials monthly price', function () {
+    completeWelcomeThroughSoftware($this->user);
+    $socials = Plan::where('slug', Slug::Socials)->firstOrFail();
+    $socials->update([
+        'stripe_monthly_price_id' => 'price_socials_monthly',
+        'stripe_yearly_price_id' => 'price_socials_yearly',
+    ]);
+
+    $this->mock(StartSubscriptionCheckout::class)
+        ->shouldReceive('redirect')
+        ->once()
+        ->withArgs(fn ($account, $priceId, $cancelUrl, $plan): bool => $account->is($this->user->account)
+            && $priceId === 'price_socials_monthly'
+            && $cancelUrl === route('app.welcome.plan')
+            && $plan->is($socials))
+        ->andReturn(redirect('https://checkout.stripe.test/session'));
+
+    $this->actingAs($this->user->fresh())
+        ->post(route('app.welcome.plan.store'))
+        ->assertRedirect('https://checkout.stripe.test/session');
+});
+
+test('checkout.started records whether the first-month offer was shown', function (string $couponId, bool $offered) {
+    config([
+        'services.posthog.enabled' => true,
+        'services.posthog.api_key' => 'phc_test',
+        'cashier.first_month_coupon_ids.socials' => $couponId,
+    ]);
+    Bus::fake();
+    completeWelcomeThroughSoftware($this->user);
+    Plan::where('slug', Slug::Socials)->update(['stripe_monthly_price_id' => 'price_socials_monthly']);
+
+    $this->mock(StartSubscriptionCheckout::class)
+        ->shouldReceive('redirect')
+        ->once()
+        ->andReturn(redirect('https://checkout.stripe.test/session'));
+
+    $this->actingAs($this->user->fresh())
+        ->post(route('app.welcome.plan.store'))
+        ->assertRedirect('https://checkout.stripe.test/session');
+
+    Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'capture'
+        && data_get($event->payload, 'event') === CheckoutEvent::Started->value
+        && data_get($event->payload, 'properties.is_first_month_offer') === $offered);
+})->with([
+    'with the coupon' => ['coupon_socials', true],
+    'without the coupon' => ['', false],
+]);
+
+test('picking an AI app on the MCP step records which one', function (string $client) {
+    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
+    Bus::fake();
+    attachCurrentWorkspace($this->user);
+    subscribeAccount($this->user->account);
+
+    $this->actingAs($this->user->fresh())
+        ->postJson(route('app.welcome.mcp.connect-click'), ['client' => $client])
+        ->assertNoContent();
+
+    Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'capture'
+        && data_get($event->payload, 'event') === WelcomeEvent::McpConnectClicked->value
+        && data_get($event->payload, 'properties.client') === $client
+        && data_get($event->payload, 'properties.account_id') === $this->user->account_id);
+})->with(['claude', 'chatgpt', 'other']);
+
+test('picking an AI app requires a known app', function (array $payload) {
+    Bus::fake();
+
+    $this->actingAs($this->user)
+        ->postJson(route('app.welcome.mcp.connect-click'), $payload)
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('client');
+
+    Bus::assertNotDispatched(SendEvent::class);
+})->with([
+    'missing' => [[]],
+    'unknown' => [['client' => 'gemini']],
+]);
+
+test('skipping the MCP step records it and goes to the schedule', function () {
+    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
+    Bus::fake();
+    attachCurrentWorkspace($this->user);
+    subscribeAccount($this->user->account);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.mcp.skip'))
+        ->assertRedirect(route('app.posts.index'));
+
+    Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'capture'
+        && data_get($event->payload, 'event') === WelcomeEvent::McpSkipped->value);
+});
+
+test('skipping the MCP step without app access goes back to Welcome and records nothing', function () {
+    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
+    Bus::fake();
+
+    $this->actingAs($this->user)
+        ->get(route('app.welcome.mcp.skip'))
+        ->assertRedirect(route('app.welcome.persona'));
+
+    Bus::assertNotDispatched(SendEvent::class);
+});
+
+test('the MCP step gives the TryPost MCP URL and the owner connections', function () {
+    attachCurrentWorkspace($this->user);
+    subscribeAccount($this->user->account);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.mcp'))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('welcome/Mcp', false)
+            ->where('mcpUrl', route('mcp.trypost'))
+            ->where('connectedClients', [])
+            ->missing('prompt')
+        );
+});
+
+test('the MCP step lists the MCP apps the owner already connected', function () {
+    $workspace = attachCurrentWorkspace($this->user);
+    subscribeAccount($this->user->account);
+    $clientId = mcpOauthClient('Claude');
+    mcpAccessToken($this->user, $clientId, $workspace);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.mcp'))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->has('connectedClients', 1)
+            ->where('connectedClients.0.client_id', $clientId)
+            ->where('connectedClients.0.name', 'Claude')
+        );
+});
+
+test('the MCP step sends a user without a current workspace to create one', function () {
+    subscribeAccount($this->user->account);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.mcp'))
+        ->assertRedirect(route('app.workspaces.create'));
+});
+
+test('the MCP step works for a member and on self-hosted', function (Closure $actor) {
+    $this->actingAs($actor($this->user))
+        ->get(route('app.welcome.mcp'))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page->component('welcome/Mcp', false));
+})->with([
+    'member' => [function (User $owner): User {
+        $workspace = attachCurrentWorkspace($owner);
+        subscribeAccount($owner->account);
+        $member = User::factory()->create(['account_id' => $owner->account_id]);
+        $workspace->members()->attach($member->id, membershipPivot('member'));
+        $member->update(['current_workspace_id' => $workspace->id]);
+
+        return $member->fresh();
+    }],
+    'self-hosted' => [function (User $owner): User {
+        config(['trypost.self_hosted' => true]);
+        attachCurrentWorkspace($owner);
+
+        return $owner->fresh();
+    }],
+]);
+
+test('the MCP step sends an account without app access back to Welcome', function () {
+    attachCurrentWorkspace($this->user);
+
+    $this->actingAs($this->user->fresh())
+        ->get(route('app.welcome.mcp'))
+        ->assertRedirect(route('app.welcome.persona'));
+});
+
+test('plan store fails loudly when the Socials price is not configured', function () {
+    completeWelcomeThroughSoftware($this->user);
+    Plan::where('slug', Slug::Socials)->update(['stripe_monthly_price_id' => null]);
+
+    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
+
+    $this->actingAs($this->user->fresh())
+        ->post(route('app.welcome.plan.store'))
+        ->assertStatus(500);
+});
+
+test('a welcome step stores a locale change and stays on the page', function () {
+    completeWelcomeThroughGoals($this->user);
+
+    $this->actingAs($this->user->fresh())
+        ->from(route('app.welcome.software'))
+        ->put(route('app.profile.language'), ['locale' => 'pt-BR'])
+        ->assertRedirect(route('app.welcome.software'))
+        ->assertCookieMissing('locale');
+
+    expect($this->user->fresh()->locale)->toBe(Locale::PortugueseBrazil);
+});
+
 test('completed welcome steps remain reachable when going back', function () {
     attachCurrentWorkspace($this->user);
     $this->user->update([
         'persona' => Persona::Agency->value,
         'goals' => [Goal::SaveTime->value],
-        'referral_source' => ReferralSource::Google->value,
+        'previous_software' => PreviousSoftware::Buffer->value,
     ]);
 
     $this->actingAs($this->user->fresh())
@@ -138,84 +441,17 @@ test('completed welcome steps remain reachable when going back', function () {
         ->assertInertia(fn ($page) => $page->component('welcome/Goals', false));
 
     $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.referral-source'))
+        ->get(route('app.welcome.software'))
         ->assertOk()
-        ->assertInertia(fn ($page) => $page->component('welcome/ReferralSource', false));
+        ->assertInertia(fn ($page) => $page->component('welcome/Software', false)->where('selected', PreviousSoftware::Buffer->value));
 
     $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.connect'))
+        ->get(route('app.welcome.plan'))
         ->assertOk()
-        ->assertInertia(fn ($page) => $page->component('welcome/Connect', false));
+        ->assertInertia(fn ($page) => $page->component('welcome/Plan', false));
 });
 
-test('referral source redirects through incomplete prior steps', function (array $attributes, string $routeName) {
-    $this->user->update($attributes);
-
-    $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.referral-source'))
-        ->assertRedirect(route($routeName));
-})->with([
-    'missing persona' => [[], 'app.welcome.persona'],
-    'missing goals' => [['persona' => Persona::Agency->value], 'app.welcome.goals'],
-    'only removed goals' => [
-        [
-            'persona' => Persona::Agency->value,
-            'goals' => ['team_collaboration', 'automate_api', 'track_performance'],
-        ],
-        'app.welcome.goals',
-    ],
-]);
-
-test('referral source allows users who still have at least one current goal', function () {
-    $this->user->update([
-        'persona' => Persona::Agency->value,
-        'goals' => [Goal::SaveTime->value, 'team_collaboration'],
-    ]);
-
-    $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.referral-source'))
-        ->assertOk()
-        ->assertInertia(fn ($page) => $page->component('welcome/ReferralSource', false));
-});
-
-test('referral source renders after prior steps are complete', function () {
-    $this->user->update([
-        'persona' => Persona::Agency->value,
-        'goals' => [Goal::SaveTime->value],
-    ]);
-
-    $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.referral-source'))
-        ->assertOk()
-        ->assertInertia(fn ($page) => $page
-            ->component('welcome/ReferralSource', false)
-            ->has('sources', count(ReferralSource::cases()))
-            ->where('sources', fn ($sources): bool => collect($sources)->contains(ReferralSource::GitHub->value)
-                && collect($sources)->contains(ReferralSource::Threads->value)
-                && collect($sources)->contains(ReferralSource::HackerNews->value)
-                && collect($sources)->contains(ReferralSource::Directories->value)
-                && collect($sources)->contains(ReferralSource::Founder->value))
-            ->missing('plan')
-        );
-});
-
-test('referral source requires a valid selection', function (array $payload) {
-    $this->user->update([
-        'persona' => Persona::Agency->value,
-        'goals' => [Goal::SaveTime->value],
-    ]);
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.referral-source.store'), $payload)
-        ->assertSessionHasErrors('referral_source');
-
-    expect($this->user->fresh()->referral_source)->toBeNull();
-})->with([
-    'missing' => [[]],
-    'invalid' => [['referral_source' => 'not-a-source']],
-]);
-
-test('welcome funnel captures connect between referral and checkout.started', function () {
+test('welcome funnel captures every step before checkout.started', function () {
     config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
     Bus::fake();
     $workspace = attachCurrentWorkspace($this->user);
@@ -237,23 +473,14 @@ test('welcome funnel captures connect between referral and checkout.started', fu
 
     $this->actingAs($this->user->fresh())
         ->post(route('app.welcome.goals.store'), ['goals' => [Goal::SaveTime->value]])
-        ->assertRedirect(route('app.welcome.referral-source'));
+        ->assertRedirect(route('app.welcome.software'));
 
     $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.referral-source.store'), [
-            'referral_source' => ReferralSource::ProductHunt->value,
-        ])
-        ->assertRedirect(route('app.welcome.connect'));
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.connect.store'))
+        ->post(route('app.welcome.software.store'), ['previous_software' => PreviousSoftware::None->value])
         ->assertRedirect(route('app.welcome.plan'));
 
     $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.plan.store'), [
-            'plan_id' => $plan->id,
-            'interval' => 'monthly',
-        ])
+        ->post(route('app.welcome.plan.store'))
         ->assertRedirect('https://checkout.stripe.test/session');
 
     $funnel = WelcomeEvent::funnel();
@@ -268,286 +495,17 @@ test('welcome funnel captures connect between referral and checkout.started', fu
     expect($captured)->toBe($funnel);
 });
 
-test('referral source store saves the source mirrors it to PostHog and advances to connect', function () {
-    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
-    Bus::fake();
-    $this->user->update([
-        'persona' => Persona::Agency->value,
-        'goals' => [Goal::SaveTime->value],
-    ]);
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.referral-source.store'), [
-            'referral_source' => ReferralSource::ProductHunt->value,
-        ])
-        ->assertRedirect(route('app.welcome.connect'));
-
-    expect($this->user->fresh()->referral_source)->toBe(ReferralSource::ProductHunt);
-    Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'capture'
-        && data_get($event->payload, 'event') === WelcomeEvent::Referral->value
-        && data_get($event->payload, 'properties.referral_source') === ReferralSource::ProductHunt->value);
-    Bus::assertNotDispatched(
-        SendEvent::class,
-        fn (SendEvent $event): bool => data_get($event->payload, 'event') === CheckoutEvent::Started->value,
-    );
-});
-
-test('connect redirects through incomplete prior steps', function (array $attributes, string $routeName, string $method, bool $withWorkspace) {
-    $this->user->update($attributes);
-
-    if ($withWorkspace) {
-        attachCurrentWorkspace($this->user);
-    }
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh());
-
-    $response = $method === 'get'
-        ? $this->get(route('app.welcome.connect'))
-        : $this->post(route('app.welcome.connect.store'));
-
-    $response->assertRedirect(route($routeName));
-})->with([
-    'get missing persona' => [[], 'app.welcome.persona', 'get'],
-    'get missing goals' => [['persona' => Persona::Agency->value], 'app.welcome.goals', 'get'],
-    'get missing referral' => [
-        [
-            'persona' => Persona::Agency->value,
-            'goals' => [Goal::SaveTime->value],
-        ],
-        'app.welcome.referral-source',
-        'get',
-    ],
-    'post missing persona' => [[], 'app.welcome.persona', 'post'],
-    'post missing goals' => [['persona' => Persona::Agency->value], 'app.welcome.goals', 'post'],
-    'post missing referral' => [
-        [
-            'persona' => Persona::Agency->value,
-            'goals' => [Goal::SaveTime->value],
-        ],
-        'app.welcome.referral-source',
-        'post',
-    ],
-    'get only removed goals' => [
-        [
-            'persona' => Persona::Agency->value,
-            'goals' => ['team_collaboration', 'automate_api', 'track_performance'],
-            'referral_source' => ReferralSource::Google->value,
-        ],
-        'app.welcome.goals',
-        'get',
-    ],
-    'post only removed goals' => [
-        [
-            'persona' => Persona::Agency->value,
-            'goals' => ['team_collaboration', 'automate_api', 'track_performance'],
-            'referral_source' => ReferralSource::Google->value,
-        ],
-        'app.welcome.goals',
-        'post',
-    ],
-])->with([
-    'without workspace' => [false],
-    'with empty workspace' => [true],
-]);
-
-test('connect returns 404 when prior steps are complete but the user has no workspace', function () {
-    completeWelcomeThroughReferral($this->user);
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.connect'))
-        ->assertNotFound();
-
-    $this->actingAs($this->user->fresh())
-        ->from(route('app.welcome.connect'))
-        ->post(route('app.welcome.connect.store'))
-        ->assertNotFound();
-});
-
-test('connect renders the network grid when the workspace has no accounts', function () {
-    completeWelcomeThroughReferral($this->user);
-    attachCurrentWorkspace($this->user);
-
-    $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.connect'))
-        ->assertOk()
-        ->assertInertia(fn ($page) => $page
-            ->component('welcome/Connect', false)
-            ->has('platforms', count(SocialPlatform::connectableOptions()))
-            ->where('accounts', [])
-        );
-});
-
-test('connect renders connected accounts for the current workspace', function () {
-    completeWelcomeThroughReferral($this->user);
-    $workspace = attachCurrentWorkspace($this->user);
-    $account = SocialAccount::factory()->linkedin()->create(['workspace_id' => $workspace->id]);
-
-    $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.connect'))
-        ->assertOk()
-        ->assertInertia(fn ($page) => $page
-            ->component('welcome/Connect', false)
-            ->has('platforms', count(SocialPlatform::connectableOptions()))
-            ->has('accounts', 1)
-            ->where('accounts.0.id', $account->id)
-            ->where('accounts.0.platform', SocialPlatform::LinkedIn->value)
-            ->where('accounts.0.status', Status::Connected->value)
-        );
-});
-
-test('every step shares the welcome summary that fills in as the user progresses', function () {
+test('welcome steps no longer share a workspace summary', function () {
     $this->actingAs($this->user)
         ->get(route('app.welcome.persona'))
         ->assertInertia(fn ($page) => $page
             ->component('welcome/Persona', false)
-            ->where('welcome.persona', null)
-            ->where('welcome.goals', [])
-            ->where('welcome.networks', [])
+            ->missing('welcome')
         );
-
-    completeWelcomeThroughReferral($this->user);
-    $workspace = attachCurrentWorkspace($this->user);
-    $connected = SocialAccount::factory()->linkedin()->create([
-        'workspace_id' => $workspace->id,
-        'avatar_url' => 'avatars/linkedin.jpg',
-    ]);
-    SocialAccount::factory()->x()->tokenExpired()->create(['workspace_id' => $workspace->id]);
-
-    $this->actingAs($this->user->fresh())
-        ->get(route('app.welcome.connect'))
-        ->assertOk()
-        ->assertInertia(fn ($page) => $page
-            ->component('welcome/Connect', false)
-            ->where('welcome.persona', $this->user->fresh()->persona->value)
-            ->where('welcome.goals', $this->user->fresh()->goals)
-            ->has('welcome.networks', 1)
-            ->where('welcome.networks.0.id', $connected->id)
-            ->where('welcome.networks.0.platform', SocialPlatform::LinkedIn->value)
-            ->where('welcome.networks.0.display_label', $connected->display_label)
-            ->where('welcome.networks.0.username', $connected->username)
-            ->where('welcome.networks.0.avatar_url', $connected->avatar_url)
-        );
-});
-
-test('the welcome summary drops goals that no longer exist', function () {
-    $this->user->update(['goals' => [Goal::SaveTime->value, 'retired_goal']]);
-
-    $this->actingAs($this->user)
-        ->get(route('app.welcome.persona'))
-        ->assertInertia(fn ($page) => $page
-            ->where('welcome.goals', [Goal::SaveTime->value])
-        );
-});
-
-test('connect copy exists in every locale', function (string $locale) {
-    expect(__('welcome.connect.title', [], $locale))->not->toBe('welcome.connect.title')
-        ->and(__('welcome.connect.description', [], $locale))->not->toBe('welcome.connect.description')
-        ->and(__('welcome.connect.required', [], $locale))->not->toBe('welcome.connect.required');
-})->with(ContentLanguage::values());
-
-test('connect store requires a connected social account', function () {
-    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
-    Bus::fake();
-    completeWelcomeThroughReferral($this->user);
-    attachCurrentWorkspace($this->user);
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.connect.store'))
-        ->assertSessionHasErrors('connect');
-
-    Bus::assertNotDispatched(
-        SendEvent::class,
-        fn (SendEvent $event): bool => data_get($event->payload, 'event') === WelcomeEvent::Connect->value,
-    );
-    Bus::assertNotDispatched(
-        SendEvent::class,
-        fn (SendEvent $event): bool => data_get($event->payload, 'event') === CheckoutEvent::Started->value,
-    );
-});
-
-test('connect store rejects disconnected or expired social accounts', function () {
-    completeWelcomeThroughReferral($this->user);
-    $workspace = attachCurrentWorkspace($this->user);
-    SocialAccount::factory()->linkedin()->disconnected()->create(['workspace_id' => $workspace->id]);
-    SocialAccount::factory()->x()->tokenExpired()->create(['workspace_id' => $workspace->id]);
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.connect.store'))
-        ->assertSessionHasErrors('connect');
-});
-
-test('connect store ignores social accounts on another workspace', function () {
-    completeWelcomeThroughReferral($this->user);
-    attachCurrentWorkspace($this->user);
-
-    $otherWorkspace = Workspace::factory()->create([
-        'account_id' => $this->user->account_id,
-        'user_id' => $this->user->id,
-    ]);
-    SocialAccount::factory()->linkedin()->create(['workspace_id' => $otherWorkspace->id]);
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.connect.store'))
-        ->assertSessionHasErrors('connect');
-});
-
-test('connect store advances to the plan step when a social account is connected', function () {
-    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test']);
-    Bus::fake();
-    completeWelcomeThroughReferral($this->user);
-    $workspace = attachCurrentWorkspace($this->user);
-    SocialAccount::factory()->linkedin()->create(['workspace_id' => $workspace->id]);
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.connect.store'))
-        ->assertRedirect(route('app.welcome.plan'));
-
-    Bus::assertDispatched(SendEvent::class, fn (SendEvent $event): bool => $event->method === 'capture'
-        && data_get($event->payload, 'event') === WelcomeEvent::Connect->value
-        && data_get($event->payload, 'properties.platforms') === [SocialPlatform::LinkedIn->value]);
-    Bus::assertNotDispatched(
-        SendEvent::class,
-        fn (SendEvent $event): bool => data_get($event->payload, 'event') === CheckoutEvent::Started->value,
-    );
-});
-
-test('connect store still advances to the plan step when posthog capture fails', function () {
-    Exceptions::fake();
-    completeWelcomeThroughReferral($this->user);
-    $workspace = attachCurrentWorkspace($this->user);
-    SocialAccount::factory()->linkedin()->create(['workspace_id' => $workspace->id]);
-
-    $this->mock(PostHogService::class)
-        ->shouldReceive('capture')
-        ->andThrow(new RuntimeException('PostHog is down.'));
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.connect.store'))
-        ->assertRedirect(route('app.welcome.plan'));
-
-    Exceptions::assertReported(RuntimeException::class);
 });
 
 test('welcome steps redirect to calendar for subscribed accounts', function (string $routeName, string $method, array $payload = []) {
     subscribeAccount($this->user->account);
-
-    if ($routeName === 'app.welcome.plan.store') {
-        $payload['plan_id'] = Plan::where('slug', Slug::Socials)->value('id');
-    }
 
     $this->actingAs($this->user->fresh());
 
@@ -561,12 +519,10 @@ test('welcome steps redirect to calendar for subscribed accounts', function (str
     'persona store' => ['app.welcome.persona.store', 'post', ['persona' => Persona::Agency->value]],
     'goals' => ['app.welcome.goals', 'get'],
     'goals store' => ['app.welcome.goals.store', 'post', ['goals' => [Goal::SaveTime->value]]],
-    'referral source' => ['app.welcome.referral-source', 'get'],
-    'referral source store' => ['app.welcome.referral-source.store', 'post', ['referral_source' => ReferralSource::Google->value]],
-    'connect' => ['app.welcome.connect', 'get'],
-    'connect store' => ['app.welcome.connect.store', 'post'],
+    'software' => ['app.welcome.software', 'get'],
+    'software store' => ['app.welcome.software.store', 'post', ['previous_software' => PreviousSoftware::Buffer->value]],
     'plan' => ['app.welcome.plan', 'get'],
-    'plan store' => ['app.welcome.plan.store', 'post', ['interval' => 'monthly']],
+    'plan store' => ['app.welcome.plan.store', 'post'],
 ]);
 
 test('welcome redirects generic-trial accounts with app access to calendar', function () {
@@ -587,10 +543,6 @@ test('welcome redirects generic-trial accounts with app access to calendar', fun
 test('welcome steps redirect to calendar in self hosted mode', function (string $routeName, string $method, array $payload = []) {
     config(['trypost.self_hosted' => true]);
 
-    if ($routeName === 'app.welcome.plan.store') {
-        $payload['plan_id'] = Plan::where('slug', Slug::Socials)->value('id');
-    }
-
     $this->actingAs($this->user);
 
     $response = $method === 'get'
@@ -603,12 +555,10 @@ test('welcome steps redirect to calendar in self hosted mode', function (string 
     'persona store' => ['app.welcome.persona.store', 'post', ['persona' => Persona::Agency->value]],
     'goals' => ['app.welcome.goals', 'get'],
     'goals store' => ['app.welcome.goals.store', 'post', ['goals' => [Goal::SaveTime->value]]],
-    'referral source' => ['app.welcome.referral-source', 'get'],
-    'referral source store' => ['app.welcome.referral-source.store', 'post', ['referral_source' => ReferralSource::Google->value]],
-    'connect' => ['app.welcome.connect', 'get'],
-    'connect store' => ['app.welcome.connect.store', 'post'],
+    'software' => ['app.welcome.software', 'get'],
+    'software store' => ['app.welcome.software.store', 'post', ['previous_software' => PreviousSoftware::Buffer->value]],
     'plan' => ['app.welcome.plan', 'get'],
-    'plan store' => ['app.welcome.plan.store', 'post', ['interval' => 'monthly']],
+    'plan store' => ['app.welcome.plan.store', 'post'],
 ]);
 
 test('old onboarding routes are not registered', function (string $routeName) {
@@ -620,15 +570,16 @@ test('old onboarding routes are not registered', function (string $routeName) {
     'complete' => 'app.onboarding.complete',
     'goals' => 'app.onboarding.goals',
     'goals store' => 'app.onboarding.goals.store',
-    'referral source' => 'app.onboarding.referral-source',
-    'referral source store' => 'app.onboarding.referral-source.store',
     'connect' => 'app.onboarding.connect',
+    'welcome connect' => 'app.welcome.connect',
+    'welcome connect store' => 'app.welcome.connect.store',
+    'welcome referral source' => 'app.welcome.referral-source',
     'checkout' => 'app.onboarding.checkout',
 ]);
 
 test('members cannot start Stripe checkout from welcome', function (bool $withWorkspace) {
     $member = User::factory()->create(['account_id' => $this->user->account_id]);
-    completeWelcomeThroughReferral($member);
+    completeWelcomeThroughGoals($member);
 
     if ($withWorkspace) {
         attachCurrentWorkspace($member);
@@ -637,35 +588,15 @@ test('members cannot start Stripe checkout from welcome', function (bool $withWo
     $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
 
     $this->actingAs($member->fresh())
-        ->get(route('app.welcome.connect'))
-        ->assertRedirect(route('app.welcome.subscription-required'));
-
-    $this->actingAs($member->fresh())
-        ->post(route('app.welcome.connect.store'))
+        ->post(route('app.welcome.software.store'), ['previous_software' => PreviousSoftware::Buffer->value])
         ->assertRedirect(route('app.welcome.subscription-required'));
 })->with([
     'without workspace' => [false],
     'with empty workspace' => [true],
 ]);
 
-test('subscribed owners skip connect validation and go to calendar', function () {
-    subscribeAccount($this->user->account);
-    completeWelcomeThroughReferral($this->user);
-    attachCurrentWorkspace($this->user);
-
-    $this->mock(StartSubscriptionCheckout::class)->shouldNotReceive('redirect');
-
-    $this->actingAs($this->user->fresh())
-        ->post(route('app.welcome.connect.store'))
-        ->assertRedirect(route('app.calendar'));
-});
-
 test('members without app access are held on the subscription required screen', function (string $routeName, string $method, array $payload = []) {
     $member = User::factory()->create(['account_id' => $this->user->account_id]);
-
-    if ($routeName === 'app.welcome.plan.store') {
-        $payload['plan_id'] = Plan::where('slug', Slug::Socials)->value('id');
-    }
 
     $this->actingAs($member->fresh());
 
@@ -679,12 +610,10 @@ test('members without app access are held on the subscription required screen', 
     'persona store' => ['app.welcome.persona.store', 'post', ['persona' => Persona::Agency->value]],
     'goals' => ['app.welcome.goals', 'get'],
     'goals store' => ['app.welcome.goals.store', 'post', ['goals' => [Goal::SaveTime->value]]],
-    'referral source' => ['app.welcome.referral-source', 'get'],
-    'referral source store' => ['app.welcome.referral-source.store', 'post', ['referral_source' => ReferralSource::Google->value]],
-    'connect' => ['app.welcome.connect', 'get'],
-    'connect store' => ['app.welcome.connect.store', 'post'],
+    'software' => ['app.welcome.software', 'get'],
+    'software store' => ['app.welcome.software.store', 'post', ['previous_software' => PreviousSoftware::Buffer->value]],
     'plan' => ['app.welcome.plan', 'get'],
-    'plan store' => ['app.welcome.plan.store', 'post', ['interval' => 'monthly']],
+    'plan store' => ['app.welcome.plan.store', 'post'],
 ]);
 
 test('subscription required screen renders for members without app access', function () {
@@ -741,13 +670,18 @@ test('welcome sends members with app access to the calendar', function () {
         ->assertRedirect(route('app.calendar'));
 });
 
-function completeWelcomeThroughReferral(User $user): void
+function completeWelcomeThroughGoals(User $user): void
 {
     $user->update([
         'persona' => Persona::Agency->value,
         'goals' => [Goal::SaveTime->value],
-        'referral_source' => ReferralSource::ProductHunt->value,
     ]);
+}
+
+function completeWelcomeThroughSoftware(User $user): void
+{
+    completeWelcomeThroughGoals($user);
+    $user->update(['previous_software' => PreviousSoftware::Buffer->value]);
 }
 
 function attachCurrentWorkspace(User $user): Workspace
@@ -756,7 +690,7 @@ function attachCurrentWorkspace(User $user): Workspace
         'account_id' => $user->account_id,
         'user_id' => $user->id,
     ]);
-    $workspace->members()->attach($user->id, ['role' => Role::Admin->value]);
+    $workspace->members()->attach($user->id, membershipPivot('admin'));
     $user->update(['current_workspace_id' => $workspace->id]);
 
     return $workspace;

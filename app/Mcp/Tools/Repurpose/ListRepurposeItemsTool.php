@@ -17,17 +17,21 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
+#[IsReadOnly(true)]
+#[IsDestructive(false)]
+#[IsOpenWorld(false)]
 #[Description('List every source video a repurpose has seen, with why each was skipped when it was: already published through TryPost, no downloadable file, or a failed download. This is where to look when a video was not replicated.')]
-#[IsReadOnly]
 class ListRepurposeItemsTool extends Tool
 {
     use AuthorizesMcpTool, ResolvesWorkspaceRepurpose;
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace($request, 'manageRepurposes', 'Not authorized to manage repurposes.');
+        $workspace = $this->currentWorkspace($request);
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
@@ -38,6 +42,10 @@ class ListRepurposeItemsTool extends Tool
 
         if (! $repurpose instanceof Repurpose) {
             return $repurpose;
+        }
+
+        if ($denied = $this->denyUnlessCan($request, 'view', $repurpose, 'Repurpose not found.')) {
+            return $denied;
         }
 
         $items = ListRepurposeItems::execute($repurpose, page: (int) data_get($validated, 'page', 1));

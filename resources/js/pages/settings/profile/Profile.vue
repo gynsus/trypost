@@ -1,27 +1,35 @@
 <script setup lang="ts">
-import { Form, Head, Link, usePage } from '@inertiajs/vue3';
-import { trans } from 'laravel-vue-i18n';
-import { computed } from 'vue';
+import { Form, Head, Link, router, usePage } from '@inertiajs/vue3';
+import { computed, ref } from 'vue';
 
 import ProfileController from '@/actions/App/Http/Controllers/App/Settings/ProfileController';
-import HeadingSmall from '@/components/HeadingSmall.vue';
-import InputError from '@/components/InputError.vue';
-import PageHeader from '@/components/PageHeader.vue';
+import type { PasswordRequirement } from '@/components/auth/PasswordRequirements.vue';
+import DeleteUser from '@/components/DeleteUser.vue';
 import PhotoUpload from '@/components/PhotoUpload.vue';
-import SettingsTabsNav from '@/components/settings/SettingsTabsNav.vue';
+import ProfileLoginSettings from '@/components/settings/profile/ProfileLoginSettings.vue';
+import type { ConnectedAccount } from '@/components/settings/profile/ProfileLoginSettings.vue';
+import ProfileSessions from '@/components/settings/profile/ProfileSessions.vue';
+import type { Session } from '@/components/settings/profile/ProfileSessions.vue';
+import SettingsField from '@/components/settings/SettingsField.vue';
+import SettingsSection from '@/components/settings/SettingsSection.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
-import AppLayout from '@/layouts/AppLayout.vue';
-import { edit as editAuthentication } from '@/routes/app/authentication';
-import { preferences as notificationPreferences } from '@/routes/app/notifications';
-import { deletePhoto, edit as editProfile, uploadPhoto } from '@/routes/app/profile';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import SettingsLayout from '@/layouts/SettingsLayout.vue';
+import { deletePhoto, edit, uploadPhoto } from '@/routes/app/profile';
 import { send } from '@/routes/verification';
+
+type ProfileTab = 'profile' | 'login' | 'sessions';
+
+const PROFILE_TABS: ProfileTab[] = ['profile', 'login', 'sessions'];
 
 interface Props {
     mustVerifyEmail: boolean;
-    status?: string;
+    hasPassword: boolean;
+    passwordRequirements: PasswordRequirement[];
+    connectedAccounts: ConnectedAccount[];
+    sessions: Session[];
 }
 
 defineProps<Props>();
@@ -29,108 +37,145 @@ defineProps<Props>();
 const page = usePage();
 const user = computed(() => page.props.auth.user);
 
-const tabs = computed(() => [
-    { name: 'profile', label: trans('settings.nav.profile'), href: editProfile().url },
-    { name: 'authentication', label: trans('settings.nav.authentication'), href: editAuthentication().url },
-    { name: 'notifications', label: trans('settings.nav.notifications'), href: notificationPreferences().url },
-]);
+const profileTab = (value: unknown): ProfileTab =>
+    PROFILE_TABS.find((tab) => tab === value) ?? 'profile';
+
+const tab = ref<ProfileTab>(
+    profileTab(
+        new URL(page.url, window.location.origin).searchParams.get('tab'),
+    ),
+);
+
+const selectTab = (value: string | number): void => {
+    tab.value = profileTab(value);
+
+    router.replace({
+        url: edit({
+            query: tab.value === 'profile' ? {} : { tab: tab.value },
+        }).url,
+        preserveScroll: true,
+        preserveState: true,
+    });
+};
 </script>
 
 <template>
     <Head :title="$t('settings.profile.title')" />
 
-    <AppLayout>
-        <div class="mx-auto max-w-4xl space-y-8 px-6 py-8">
-            <PageHeader
-                :title="$t('settings.hub.title')"
-                :description="$t('settings.hub.description')"
-            />
+    <SettingsLayout :title="$t('settings.profile.title')">
+        <Tabs
+            :model-value="tab"
+            class="flex flex-col gap-8"
+            @update:model-value="selectTab"
+        >
+            <TabsList variant="line">
+                <TabsTrigger
+                    v-for="value in PROFILE_TABS"
+                    :key="value"
+                    :value="value"
+                    :data-testid="`profile-tab-${value}`"
+                >
+                    {{ $t(`settings.profile.tabs.${value}`) }}
+                </TabsTrigger>
+            </TabsList>
 
-            <SettingsTabsNav :tabs="tabs" active="profile" />
-
-            <section class="space-y-12">
-                <div class="flex flex-col space-y-6">
-                    <HeadingSmall
-                        :title="$t('settings.profile.photo_heading')"
-                        :description="$t('settings.profile.photo_description')"
-                    />
-
+            <TabsContent value="profile" class="flex flex-col gap-10">
+                <SettingsSection
+                    :title="$t('settings.profile.photo_heading')"
+                    :description="$t('settings.profile.photo_description')"
+                >
                     <PhotoUpload
                         :photo-url="user.photo_url"
                         :has-photo="user.has_photo"
                         :name="user.name"
                         :upload-url="uploadPhoto().url"
                         :delete-url="deletePhoto().url"
+                        size="sm"
                     />
-                </div>
+                </SettingsSection>
 
                 <Separator />
 
-                <div class="flex flex-col space-y-6">
-                    <HeadingSmall
-                        :title="$t('settings.profile.heading')"
-                        :description="$t('settings.profile.description')"
-                    />
-
+                <SettingsSection
+                    :title="$t('settings.profile.heading')"
+                    :description="$t('settings.profile.description')"
+                >
                     <Form
                         v-bind="ProfileController.update.form()"
-                        class="space-y-6"
+                        class="flex flex-col gap-6"
                         v-slot="{ errors, processing }"
                     >
-                        <div class="grid gap-2">
-                            <Label for="name">{{ $t('settings.profile.name') }}</Label>
+                        <SettingsField
+                            :label="$t('settings.profile.name')"
+                            for="name"
+                            :error="errors.name"
+                        >
                             <Input
                                 id="name"
                                 name="name"
                                 :default-value="user.name"
                                 autocomplete="name"
-                                :placeholder="trans('settings.profile.name_placeholder')"
+                                :placeholder="$t('settings.profile.name_placeholder')"
                             />
-                            <InputError :message="errors.name" />
-                        </div>
+                        </SettingsField>
 
-                        <div class="grid gap-2">
-                            <Label for="email">{{ $t('settings.profile.email') }}</Label>
+                        <SettingsField
+                            :label="$t('settings.profile.email')"
+                            for="email"
+                            :error="errors.email"
+                        >
                             <Input
                                 id="email"
                                 type="email"
                                 name="email"
                                 :default-value="user.email"
                                 autocomplete="username"
-                                :placeholder="trans('settings.profile.email_placeholder')"
+                                :placeholder="$t('settings.profile.email_placeholder')"
                             />
-                            <InputError :message="errors.email" />
-                        </div>
+                        </SettingsField>
 
-                        <div v-if="mustVerifyEmail && !user.email_verified_at">
-                            <p class="-mt-4 text-sm text-foreground/70">
+                        <div
+                            v-if="mustVerifyEmail && !user.email_verified_at"
+                            class="-mt-4 flex flex-col gap-2"
+                        >
+                            <p class="text-sm text-muted-foreground">
                                 {{ $t('settings.profile.email_unverified') }}
                                 <Link
                                     :href="send()"
                                     as="button"
-                                    class="font-semibold text-foreground underline decoration-foreground/30 underline-offset-4 transition-colors hover:decoration-foreground"
+                                    class="cursor-pointer text-primary-text underline underline-offset-4 transition-control hover:text-primary-text-hover"
                                 >
                                     {{ $t('settings.profile.resend_verification') }}
                                 </Link>
                             </p>
-
-                            <div
-                                v-if="status === 'verification-link-sent'"
-                                class="mt-2 text-sm font-semibold text-emerald-700"
-                            >
-                                {{ $t('settings.profile.verification_sent') }}
-                            </div>
                         </div>
 
                         <Button
                             :disabled="processing"
+                            class="self-start"
                             data-test="update-profile-button"
                         >
                             {{ $t('settings.profile.save') }}
                         </Button>
                     </Form>
-                </div>
-            </section>
-        </div>
-    </AppLayout>
+                </SettingsSection>
+
+                <Separator />
+
+                <DeleteUser :has-password="hasPassword" />
+            </TabsContent>
+
+            <TabsContent value="login">
+                <ProfileLoginSettings
+                    :has-password="hasPassword"
+                    :password-requirements="passwordRequirements"
+                    :connected-accounts="connectedAccounts"
+                />
+            </TabsContent>
+
+            <TabsContent value="sessions">
+                <ProfileSessions :sessions="sessions" />
+            </TabsContent>
+        </Tabs>
+    </SettingsLayout>
 </template>

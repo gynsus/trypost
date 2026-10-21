@@ -1,0 +1,134 @@
+import { router, usePage } from '@inertiajs/vue3';
+import { trans, transChoice } from 'laravel-vue-i18n';
+import type { InjectionKey, Ref } from 'vue';
+import { toast } from 'vue-sonner';
+
+import { duplicate as duplicatePost } from '@/actions/App/Http/Controllers/App/PostController';
+import { update as updatePostLabels } from '@/actions/App/Http/Controllers/App/PostLabelController';
+import { update as updatePostSchedule } from '@/actions/App/Http/Controllers/App/PostScheduleController';
+import { openPostComposer } from '@/composables/useGlobalPostComposer';
+import { copyToClipboard } from '@/lib/utils';
+import type { SidebarChannel } from '@/types/channel';
+import type {
+    PostCard,
+    PostCardLabel,
+    PostScheduleAction,
+} from '@/types/publish';
+
+export const deletePostCardKey: InjectionKey<(post: PostCard) => void> =
+    Symbol('deletePostCard');
+
+export const editPostCardUrlKey: InjectionKey<(post: PostCard) => string> =
+    Symbol('editPostCardUrl');
+
+export const postCardLabelsKey: InjectionKey<Readonly<Ref<PostCardLabel[]>>> =
+    Symbol('postCardLabels');
+
+const successMessage = (
+    action: PostScheduleAction,
+    requestsApproval: boolean,
+): string | null => {
+    if (action !== 'queue_next' && action !== 'queue_top') {
+        return null;
+    }
+
+    return requestsApproval
+        ? trans('posts.approvals.requested')
+        : transChoice('posts.composer.queue.added', 1, { count: '1' });
+};
+
+export const toastFirstError = (errors: Record<string, string>): void => {
+    const message = Object.values(errors)[0];
+
+    if (message) {
+        toast.error(message);
+    }
+};
+
+export const schedulePostCard = (
+    postId: string,
+    action: PostScheduleAction,
+    options: {
+        only?: string[];
+        reset?: string[];
+        requestsApproval?: boolean;
+    } = {},
+): void => {
+    const { requestsApproval = false, ...reload } = options;
+
+    router.put(
+        updatePostSchedule.url(postId),
+        { action },
+        {
+            ...reload,
+            preserveScroll: true,
+            onSuccess: () => {
+                const message = successMessage(action, requestsApproval);
+
+                if (message) {
+                    toast.success(message, { testId: 'post-schedule-toast' });
+                }
+            },
+            onError: toastFirstError,
+        },
+    );
+};
+
+export const duplicatePostCard = (post: PostCard): void => {
+    router.post(duplicatePost.url(post.id));
+};
+
+/** Opens the composer with the sent post's link and every channel of the workspace. */
+export const sharePostCardLink = (post: PostCard): void => {
+    if (!post.platform_url) return;
+
+    const channels = (usePage().props.channels as SidebarChannel[] | undefined) ?? [];
+
+    openPostComposer({
+        socialAccountIds: channels.map((channel) => channel.id),
+        draft: {
+            content: post.platform_url,
+            media: [],
+            scheduled_at: null,
+            label_ids: [],
+        },
+    });
+};
+
+export const copyPostCardLink = (post: PostCard): void => {
+    if (post.platform_url) {
+        void copyToClipboard(post.platform_url, undefined, {
+            showSuccessToast: false,
+        });
+    }
+};
+
+export const syncPostCardLabels = (
+    postId: string,
+    labelIds: string[],
+    rollback: () => void,
+): void => {
+    const fail = (): void => {
+        rollback();
+        toast.error(trans('posts.publish.actions.edit_labels_failed'), {
+            testId: 'post-labels-error-toast',
+        });
+    };
+
+    router.patch(
+        updatePostLabels.url(postId),
+        { labels: labelIds },
+        {
+            preserveScroll: true,
+            preserveState: true,
+            only: ['posts', 'queue'],
+            reset: ['posts'],
+            onError: fail,
+            onHttpException: () => {
+                fail();
+
+                return false;
+            },
+        },
+    );
+};

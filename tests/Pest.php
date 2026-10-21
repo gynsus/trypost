@@ -3,15 +3,25 @@
 declare(strict_types=1);
 
 use App\Enums\Plan\Slug;
-use App\Enums\UserWorkspace\Role;
+use App\Enums\SocialAccount\Platform;
+use App\Jobs\Analytics\BootstrapAccountAnalytics;
+use App\Jobs\Analytics\CollectAccountDailySnapshot;
 use App\Models\AccessToken;
 use App\Models\Account;
 use App\Models\Plan;
+use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Services\Http\HostResolver;
+use App\Support\Social\PendingConnection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request as HttpClientRequest;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
 use Tests\BrowserTestCase;
 use Tests\TestCase;
 
@@ -28,11 +38,21 @@ use Tests\TestCase;
 
 pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
+    ->beforeEach(function (): void {
+        Http::preventStrayRequests();
+        fakePwnedPasswords();
+        fakeChatGptEgressRanges();
+        Queue::fake([BootstrapAccountAnalytics::class]);
+    })
     ->in('Feature', 'Unit');
 
 pest()->extend(BrowserTestCase::class)
     ->use(RefreshDatabase::class)
+    ->beforeEach(fn () => fakePwnedPasswords())
     ->in('Browser');
+
+pest()->in('Feature/Social')
+    ->beforeEach(fn () => Queue::fake([BootstrapAccountAnalytics::class, CollectAccountDailySnapshot::class]));
 
 /*
 |--------------------------------------------------------------------------
@@ -46,6 +66,19 @@ pest()->extend(BrowserTestCase::class)
 */
 
 pest()->tia()->locally();
+
+/*
+|--------------------------------------------------------------------------
+| Browser Timeout
+|--------------------------------------------------------------------------
+|
+| CI runs the browser suite with four processes per runner, so an action can
+| wait longer than the plugin's 5 seconds before its element is ready. This is
+| the ceiling of each wait, not a delay.
+|
+*/
+
+pest()->browser()->timeout(15000);
 
 /*
 |--------------------------------------------------------------------------
@@ -78,6 +111,47 @@ expect()->extend('toBeOne', function () {
  * the plain JWT string. Use the returned token in `Authorization: Bearer ...`
  * to exercise the auth:api + workspace.token middleware stack.
  */
+function strongPassword(): string
+{
+    return 'Tr7#pass-Word-2026';
+}
+
+function compromisedPassword(): string
+{
+    return 'Compromised#Pass-2026';
+}
+
+function fakePwnedPasswords(): void
+{
+    $hash = strtoupper(sha1(compromisedPassword()));
+
+    Http::fake([
+        'api.pwnedpasswords.com/range/*' => fn (HttpClientRequest $request) => Http::response(
+            str_ends_with($request->url(), substr($hash, 0, 5)) ? substr($hash, 5).':42' : '',
+        ),
+    ]);
+}
+
+/**
+ * OpenAI's published ChatGPT egress ranges, answered from the
+ * testing.chatgpt_egress_ranges config so a test can change them after the
+ * global fake is registered. null answers a failed read.
+ *
+ * @param  list<mixed>|null  $ranges
+ */
+function fakeChatGptEgressRanges(?array $ranges = []): void
+{
+    config(['testing.chatgpt_egress_ranges' => $ranges]);
+
+    Http::fake([
+        config('trypost.mcp_chatgpt_ip_ranges_url') => fn () => config('testing.chatgpt_egress_ranges') === null
+            ? Http::response('', 500)
+            : Http::response([
+                'prefixes' => collect(config('testing.chatgpt_egress_ranges'))->map(fn (mixed $range): array => ['ipv4Prefix' => $range])->all(),
+            ]),
+    ]);
+}
+
 function passportToken(User $user, Workspace $workspace, array $scopes = []): string
 {
     $result = $user->createToken('Test', $scopes);
@@ -106,9 +180,7 @@ function createApiTestToken(array $overrides = []): array
             'account_id' => $user->account_id,
             'user_id' => $user->id,
         ]);
-        $workspace->members()->attach($user->id, [
-            'role' => Role::Admin->value,
-        ]);
+        $workspace->members()->attach($user->id, membershipPivot('admin'));
         $user->update(['current_workspace_id' => $workspace->id]);
     } else {
         $user = $workspace->owner ?? User::factory()->create([
@@ -125,6 +197,48 @@ function createApiTestToken(array $overrides = []): array
         'workspace' => $workspace,
         'user' => $user,
     ];
+}
+
+/**
+ * Pivot columns for a workspace membership: an admin, a member who publishes
+ * directly, or a member whose posts need approval.
+ *
+ * @return array{is_admin: bool, requires_approval: bool}
+ */
+function membershipPivot(string $access): array
+{
+    return match ($access) {
+        'admin' => ['is_admin' => true, 'requires_approval' => false],
+        'member' => ['is_admin' => false, 'requires_approval' => false],
+        'approval' => ['is_admin' => false, 'requires_approval' => true],
+    };
+}
+
+/**
+ * A user on the workspace's account, attached with the given access and
+ * switched to that workspace.
+ *
+ * @param  array<string, mixed>  $attributes
+ */
+function workspaceMember(Workspace $workspace, string $access = 'member', array $attributes = []): User
+{
+    $user = User::factory()->create(['account_id' => $workspace->account_id, ...$attributes]);
+    $workspace->members()->attach($user->id, membershipPivot($access));
+    $user->update(['current_workspace_id' => $workspace->id]);
+
+    return $user->fresh();
+}
+
+/**
+ * A user on the workspace's account whose current workspace is this one but
+ * who is not a member of it.
+ */
+function workspaceOutsider(Workspace $workspace): User
+{
+    $user = User::factory()->create(['account_id' => $workspace->account_id]);
+    $user->update(['current_workspace_id' => $workspace->id]);
+
+    return $user->fresh();
 }
 
 /**
@@ -160,6 +274,70 @@ function billingAccount(string $price, array $subscriptionAttributes = [], int $
 }
 
 /**
+ * The session a connect start route leaves behind: the network, the workspace,
+ * the card being reconnected and where to return.
+ */
+function startSocialConnect(Workspace|string $workspace, Platform $platform, SocialAccount|string|null $reconnect = null, ?string $returnTo = null): PendingConnection
+{
+    $workspace = $workspace instanceof Workspace ? $workspace : (new Workspace)->forceFill(['id' => $workspace]);
+
+    return PendingConnection::start($platform, $workspace, $reconnect instanceof SocialAccount ? $reconnect->id : $reconnect, $returnTo);
+}
+
+/**
+ * "Finish connection" on the confirmation page, with every offered identity not
+ * already connected unless a selection is given.
+ *
+ * @param  array<int, string>|null  $identities
+ */
+function finishSocialConnect(Platform $platform, ?array $identities = null): TestResponse
+{
+    return test()->post(route('app.social.connect.finish', $platform), [
+        'identities' => $identities ?? array_values(array_diff(
+            PendingConnection::current()?->identityKeys() ?? [],
+            PendingConnection::current()?->lockedIdentityKeys() ?? [],
+        )),
+    ]);
+}
+
+/**
+ * Finish always lands on the publish page of the channel it connected: the given
+ * one, else any channel of the test workspace.
+ */
+function assertFinishedOnChannel(TestResponse $response, ?SocialAccount $channel = null): TestResponse
+{
+    if ($channel !== null) {
+        return $response->assertRedirect(route('app.channels.publish', $channel));
+    }
+
+    $location = (string) $response->headers->get('Location');
+
+    preg_match('#/channels/([^/]+)/publish$#', $location, $matches);
+
+    expect(SocialAccount::query()->whereKey($matches[1] ?? '')->exists())->toBeTrue("Finish redirected to {$location}");
+
+    return $response;
+}
+
+/**
+ * Why the pending connection stopped, as the confirmation page reads it.
+ */
+function socialConnectFailure(): ?string
+{
+    return PendingConnection::current()?->failure();
+}
+
+/**
+ * Every host name resolves to one public documentation address, so a fetch
+ * through SafeHttpFetcher never depends on real DNS. IP literals are still
+ * vetted by the guard itself.
+ */
+function fakePublicDns(string $address = '93.184.216.34'): void
+{
+    test()->mock(HostResolver::class)->shouldReceive('addresses')->andReturn([$address]);
+}
+
+/**
  * Attach an active default subscription to the given account.
  */
 function subscribeAccount(Account $account): void
@@ -170,6 +348,34 @@ function subscribeAccount(Account $account): void
         'stripe_status' => 'active',
         'stripe_price' => 'price_123',
     ]);
+}
+
+/**
+ * Turns PostHog on for the test, as on an install with an API key.
+ */
+function enablePostHog(): void
+{
+    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test_key']);
+}
+
+/**
+ * Make dispatching the given job throw, as when the queue is down, while every
+ * other job dispatches as usual. `$when` narrows the failure to the jobs it
+ * accepts.
+ *
+ * @param  class-string  $jobClass
+ * @param  (Closure(object): bool)|null  $when
+ */
+function failDispatchOf(string $jobClass, ?Closure $when = null): void
+{
+    $dispatcher = Bus::getFacadeRoot();
+    $bus = Mockery::mock($dispatcher);
+    $bus->shouldReceive('dispatch')
+        ->with(Mockery::on(fn (mixed $job): bool => $job instanceof $jobClass && ($when === null || $when($job))))
+        ->andThrow(new RuntimeException('Queue is down.'));
+    $bus->shouldReceive('dispatch')->andReturnUsing(fn (mixed $job, mixed $handler = null): mixed => $dispatcher->dispatch($job, $handler));
+
+    Bus::swap($bus);
 }
 
 /**
@@ -250,7 +456,7 @@ function mcpAccessToken(
  * @param  list<string>  $scopes
  * @return array{token: AccessToken, plain_token: string}
  */
-function mcpBearerToken(User $user, Workspace $workspace, array $scopes = ['mcp:use']): array
+function mcpBearerToken(User $user, Workspace $workspace, array $scopes = ['mcp:use'], string $clientName = 'My Agent'): array
 {
     $result = $user->createToken('MCP', $scopes);
     $token = AccessToken::query()->findOrFail($result->token->id);
@@ -258,7 +464,7 @@ function mcpBearerToken(User $user, Workspace $workspace, array $scopes = ['mcp:
     // Reassign to a dedicated MCP client so we never mutate Passport's shared
     // personal-access client (which would poison PAT fixtures in the same run).
     $token->forceFill([
-        'client_id' => mcpOauthClient(),
+        'client_id' => mcpOauthClient($clientName),
         'workspace_id' => $workspace->id,
     ])->saveQuietly();
 
@@ -303,13 +509,11 @@ function strandedMemberOnSharedAccount(
         ]);
 
         $workspace->members()->syncWithoutDetaching([
-            $owner->id => ['role' => Role::Admin->value],
+            $owner->id => membershipPivot('admin'),
         ]);
 
         if ($attachMember && ($attachMemberToAll || $i === 0)) {
-            $workspace->members()->attach($member->id, [
-                'role' => Role::Member->value,
-            ]);
+            $workspace->members()->attach($member->id, membershipPivot('member'));
         }
 
         $shared[] = $workspace;
@@ -327,4 +531,153 @@ function strandedMemberOnSharedAccount(
         'member' => $member->fresh(),
         'shared_workspaces' => $shared,
     ];
+}
+
+/**
+ * A workspace reachable both through a REST API token and as the MCP actor,
+ * for tests that run one scenario through both surfaces.
+ *
+ * @return array{user: User, workspace: Workspace, token: string}
+ */
+function parityContext(): array
+{
+    $result = createApiTestToken();
+
+    return [
+        'user' => $result['user']->fresh(),
+        'workspace' => $result['workspace'],
+        'token' => $result['plain_token'],
+    ];
+}
+
+/**
+ * @return array<string, string>
+ */
+function parityApi(string $token): array
+{
+    return ['Authorization' => "Bearer {$token}", 'Accept' => 'application/json'];
+}
+
+/**
+ * The structured content an MCP list tool returns for the same page as a paginated API list response.
+ *
+ * @return array<string, mixed>
+ */
+function parityMcpPage(string $key, TestResponse $api): array
+{
+    return [
+        $key => $api->json('data'),
+        'total' => $api->json('meta.total'),
+        'per_page' => $api->json('meta.per_page'),
+        'current_page' => $api->json('meta.current_page'),
+        'last_page' => $api->json('meta.last_page'),
+    ];
+}
+
+/**
+ * Wait until the Inter web font is loaded, so layout assertions measure the
+ * font users see instead of whichever fallback the operating system has.
+ */
+function waitForWebFonts(mixed $page): void
+{
+    $page->script(<<<'JS'
+        (async () => {
+            const interFaces = () => [...document.fonts].filter((face) => face.family.replaceAll('"', '') === 'Inter');
+            for (let attempt = 0; attempt < 100 && interFaces().length === 0; attempt++) {
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            await Promise.all(interFaces().map((face) => face.load().catch(() => null)));
+            await document.fonts.ready;
+        })();
+    JS);
+}
+
+/**
+ * Wait until a JavaScript expression is true in the page, for up to 15
+ * seconds. Assertions do not wait for the SPA to paint, and a blocking
+ * sleep() would starve the server that serves the page, so the page polls.
+ */
+function waitForCondition(mixed $page, string $condition): void
+{
+    $page->script(<<<JS
+        (async () => {
+            for (let i = 0; i < 300; i++) {
+                if ({$condition}) return;
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+        })();
+    JS);
+}
+
+/**
+ * The selector as a JavaScript string, with `@name` standing for
+ * `[data-testid="name"]` as in `$page->click('@name')`, anywhere in it:
+ * `@channel-settings-rows [role="combobox"]`.
+ */
+function jsSelector(string $selector): string
+{
+    return json_encode(preg_replace('/@([\w-]+)/', '[data-testid="$1"]', $selector));
+}
+
+/**
+ * Wait until an element matching the selector exists and the expression,
+ * written about `element`, is true: "element.getAttribute('aria-checked') === 'true'".
+ */
+function waitForState(mixed $page, string $selector, string $expression): void
+{
+    $selector = jsSelector($selector);
+
+    waitForCondition($page, "((element) => element && ({$expression}))(document.querySelector({$selector}))");
+}
+
+/**
+ * Wait until an element matching the selector is mounted and laid out.
+ */
+function waitFor(mixed $page, string $selector): void
+{
+    waitForState($page, $selector, 'element.getBoundingClientRect().height > 0');
+}
+
+/**
+ * Wait until no element matches the selector.
+ */
+function waitForGone(mixed $page, string $selector): void
+{
+    $selector = jsSelector($selector);
+
+    waitForCondition($page, "!document.querySelector({$selector})");
+}
+
+/**
+ * Wait until any element matching the selector contains the text.
+ */
+function waitForText(mixed $page, string $selector, string $text): void
+{
+    $selector = jsSelector($selector);
+    $text = json_encode($text);
+
+    waitForCondition($page, "[...document.querySelectorAll({$selector})].some((element) => element.textContent.includes({$text}))");
+}
+
+/**
+ * Wait until one element is gone or another is shown, whichever happens
+ * first, so the assertion after it fails at once on the other outcome
+ * instead of waiting out the timeout.
+ */
+function waitForGoneOrShown(mixed $page, string $gone, string $shown): void
+{
+    $gone = jsSelector($gone);
+    $shown = jsSelector($shown);
+
+    waitForCondition($page, "!document.querySelector({$gone}) || document.querySelector({$shown})");
+}
+
+/**
+ * Wait until the page is at this path.
+ */
+function waitForPath(mixed $page, string $path): void
+{
+    $path = json_encode($path);
+
+    waitForCondition($page, "location.pathname === {$path}");
 }

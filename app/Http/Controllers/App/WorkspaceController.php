@@ -4,52 +4,24 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\App;
 
-use App\Actions\Ai\AutofillBrand;
 use App\Actions\Workspace\CreateWorkspace;
 use App\Actions\Workspace\DeleteWorkspace;
-use App\Enums\Workspace\BrandFont;
-use App\Enums\Workspace\BrandVoiceTrait;
-use App\Enums\Workspace\ContentLanguage;
-use App\Enums\Workspace\ImageStyle;
-use App\Http\Requests\App\Workspace\AutofillBrandRequest;
 use App\Http\Requests\App\Workspace\StoreWorkspaceRequest;
 use App\Http\Requests\App\Workspace\UpdateWorkspaceRequest;
-use App\Http\Resources\App\WorkspaceMemberResource;
+use App\Jobs\PostHog\TrackWorkspaceLimitHit;
+use App\Models\Account;
 use App\Models\Invite;
 use App\Models\User;
 use App\Models\Workspace;
-use App\Services\Brand\LogoAttacher;
-use Illuminate\Http\JsonResponse;
+use App\Services\PostHogService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
-use RuntimeException;
-use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class WorkspaceController extends Controller
 {
-    public function searchMembers(Request $request): AnonymousResourceCollection
-    {
-        $workspace = $request->user()->currentWorkspace;
-
-        abort_if(! $workspace, SymfonyResponse::HTTP_FORBIDDEN);
-
-        $this->authorize('view', $workspace);
-
-        $term = trim((string) $request->input('q', ''));
-
-        $members = $workspace->members()
-            ->where('users.id', '!=', $request->user()->id)
-            ->when($term !== '', fn ($query) => $query->whereLike('users.name', '%'.$term.'%'))
-            ->orderBy('users.name')
-            ->limit(50)
-            ->get(['users.id', 'users.name', 'users.email']);
-
-        return WorkspaceMemberResource::collection($members);
-    }
-
     public function index(Request $request): Response
     {
         $user = $request->user();
@@ -72,26 +44,30 @@ class WorkspaceController extends Controller
 
         $user = $request->user();
 
-        if ($redirect = $this->denyAdditionalWorkspace($user, redirectWhenAtLimit: false)) {
+        if ($redirect = $this->denyAdditionalWorkspace($user)) {
             return $redirect;
         }
 
-        return Inertia::render('workspaces/Create', [
-            'availableFonts' => BrandFont::values(),
-            'availableImageStyles' => ImageStyle::values(),
-            'availableVoiceTraits' => BrandVoiceTrait::grouped(),
-            'availableContentLanguages' => ContentLanguage::options(),
-        ]);
+        if ($user->atWorkspaceLimit() && $user->currentWorkspace) {
+            rescue(function () use ($user): void {
+                TrackWorkspaceLimitHit::dispatchIf(PostHogService::isEnabled(), (string) $user->id, $user->account?->plan?->slug->value, $user->account?->workspaceLimit(), now());
+            });
+
+            return redirect()->route('app.workspaces.index')
+                ->with('flash.error', __('workspaces.limit_reached'));
+        }
+
+        return Inertia::render('workspaces/Create');
     }
 
-    private function denyAdditionalWorkspace(User $user, bool $redirectWhenAtLimit = true): ?RedirectResponse
+    private function denyAdditionalWorkspace(User $user): ?RedirectResponse
     {
         // Invitee signup shells must stay empty until accept — otherwise they become billable.
-        if (Invite::query()->where('email', $user->email)->whereNull('accepted_at')->exists()) {
+        if (Invite::query()->forEmail($user->email)->whereNull('accepted_at')->exists()) {
             abort(403);
         }
 
-        if (config('trypost.self_hosted') || $user->ownedWorkspacesCount() === 0) {
+        if (! $user->workspaceLimitApplies()) {
             return null;
         }
 
@@ -100,42 +76,43 @@ class WorkspaceController extends Controller
                 ->with('flash.error', __('workspaces.subscription_required'));
         }
 
-        if ($redirectWhenAtLimit && ! $user->account->canCreateWorkspace()) {
-            return redirect()->route('app.workspaces.create')
-                ->with('flash.error', __('workspaces.limit_reached'));
-        }
-
         return null;
     }
 
-    public function autofillBrand(AutofillBrandRequest $request, AutofillBrand $autofill): JsonResponse
-    {
-        try {
-            $metadata = $autofill($request->validated('url'));
-        } catch (RuntimeException $e) {
-            return response()->json(['message' => $e->getMessage()], SymfonyResponse::HTTP_UNPROCESSABLE_ENTITY);
-        }
-
-        return response()->json($metadata->toArray());
-    }
-
-    public function store(StoreWorkspaceRequest $request, LogoAttacher $logoAttacher): RedirectResponse
+    public function store(StoreWorkspaceRequest $request): RedirectResponse
     {
         $user = $request->user();
 
-        if ($redirect = $this->denyAdditionalWorkspace($user)) {
+        $limitReached = false;
+
+        $redirect = DB::transaction(function () use ($user, $request, &$limitReached): ?RedirectResponse {
+            Account::query()->whereKey($user->account_id)->lockForUpdate()->first();
+
+            if ($redirect = $this->denyAdditionalWorkspace($user)) {
+                return $redirect;
+            }
+
+            if ($user->atWorkspaceLimit()) {
+                $limitReached = true;
+
+                return redirect()->route('app.workspaces.index')
+                    ->with('flash.error', __('workspaces.limit_reached'));
+            }
+
+            CreateWorkspace::execute($user, $request->validated());
+
+            return null;
+        });
+
+        if ($redirect) {
+            rescue(function () use ($user, $limitReached): void {
+                TrackWorkspaceLimitHit::dispatchIf(PostHogService::isEnabled() && $limitReached, (string) $user->id, $user->account?->plan?->slug->value, $user->account?->workspaceLimit(), now());
+            });
+
             return $redirect;
         }
 
-        $validated = $request->validated();
-
-        $workspace = CreateWorkspace::execute($user, $validated);
-
-        if ($logoUrl = data_get($validated, 'logo_url')) {
-            $logoAttacher->attach($workspace, $logoUrl);
-        }
-
-        return redirect()->route('app.accounts')
+        return redirect()->route('app.posts.index')
             ->with('success', __('workspaces.create.success'));
     }
 
@@ -181,26 +158,6 @@ class WorkspaceController extends Controller
         ]);
     }
 
-    public function brandSettings(Request $request): Response|RedirectResponse
-    {
-        $user = $request->user();
-        $workspace = $user->currentWorkspace;
-
-        if (! $workspace) {
-            return redirect()->route('app.workspaces.create');
-        }
-
-        $this->authorize('update', $workspace);
-
-        return Inertia::render('settings/workspace/Brand', [
-            'workspace' => $workspace,
-            'availableFonts' => BrandFont::values(),
-            'availableImageStyles' => ImageStyle::values(),
-            'availableVoiceTraits' => BrandVoiceTrait::grouped(),
-            'availableContentLanguages' => ContentLanguage::options(),
-        ]);
-    }
-
     public function uploadLogo(Request $request): RedirectResponse
     {
         $workspace = $request->user()->currentWorkspace;
@@ -230,7 +187,7 @@ class WorkspaceController extends Controller
         return back()->with('flash.success', __('settings.flash.logo_deleted'));
     }
 
-    public function updateSettings(UpdateWorkspaceRequest $request, LogoAttacher $logoAttacher): RedirectResponse
+    public function updateSettings(UpdateWorkspaceRequest $request): RedirectResponse
     {
         $user = $request->user();
         $workspace = $user->currentWorkspace;
@@ -241,16 +198,7 @@ class WorkspaceController extends Controller
 
         $this->authorize('update', $workspace);
 
-        $validated = $request->validated();
-
-        $logoUrl = data_get($validated, 'logo_url');
-        unset($validated['logo_url']);
-
-        $workspace->update($validated);
-
-        if ($logoUrl) {
-            $logoAttacher->attach($workspace, $logoUrl);
-        }
+        $workspace->update($request->validated());
 
         return back()->with('flash.success', __('settings.flash.workspace_updated'));
     }

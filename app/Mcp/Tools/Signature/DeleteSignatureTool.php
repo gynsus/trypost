@@ -15,8 +15,12 @@ use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
-#[IsDestructive]
+#[IsReadOnly(false)]
+#[IsDestructive(true)]
+#[IsOpenWorld(false)]
 #[Description('Delete a signature permanently. This cannot be undone.')]
 class DeleteSignatureTool extends Tool
 {
@@ -24,17 +28,13 @@ class DeleteSignatureTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace(
-            $request,
-            'createPost',
-            'Not authorized to manage signatures.',
-        );
+        $workspace = $this->authorizeCurrentWorkspace($request, 'createPost');
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
         }
 
-        $validated = $request->validate(['signature_id' => ['required', 'string']]);
+        $validated = $request->validate(['signature_id' => ['required', 'string', 'uuid']]);
 
         $signature = WorkspaceSignature::where('workspace_id', $workspace->id)
             ->find(data_get($validated, 'signature_id'));

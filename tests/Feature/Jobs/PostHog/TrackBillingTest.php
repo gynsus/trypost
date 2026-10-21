@@ -16,13 +16,20 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 
 beforeEach(function () {
-    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test_key']);
+    enablePostHog();
+    config(['trypost.self_hosted' => false]);
 
     $this->account = Account::factory()->create([
         'plan_id' => Plan::query()->where('slug', 'workspace')->first()?->id,
     ]);
     $this->user = User::factory()->create(['account_id' => $this->account->id]);
     $this->account->update(['owner_id' => $this->user->id]);
+    $this->account->subscriptions()->create([
+        'type' => Account::SUBSCRIPTION_NAME,
+        'stripe_id' => 'sub_test',
+        'stripe_status' => 'active',
+        'stripe_price' => 'price_test',
+    ]);
 
     $this->payload = [
         'type' => 'customer.subscription.updated',
@@ -52,6 +59,168 @@ test('handle captures event on the owner profile with account group attached', f
     });
 });
 
+test('handle updates the account group with the current subscription state', function () {
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Updated, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'groupIdentify'
+            && $job->payload['groupType'] === 'account'
+            && $job->payload['groupKey'] === (string) $this->account->id
+            && $job->payload['properties']['subscription_status'] === 'active'
+            && $job->payload['properties']['has_active_subscription'] === true
+            && ! array_key_exists('first_month_offer_ends_at', $job->payload['properties']);
+    });
+});
+
+test('subscription creation sets the first month offer end on the account group', function () {
+    $periodEndsAt = now()->addMonth()->startOfSecond();
+    $this->payload['data']['object']['metadata'] = [
+        'trypost_first_month_coupon_id' => 'WORKSPACES_88USD',
+    ];
+    $this->payload['data']['object']['items']['data'][0]['current_period_end'] = $periodEndsAt->timestamp;
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Created, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job) use ($periodEndsAt): bool {
+        return $job->method === 'groupIdentify'
+            && $job->payload['properties']['first_month_offer_ends_at'] === $periodEndsAt->toIso8601String();
+    });
+});
+
+test('subscription creation clears a previous first month offer when the new subscription has none', function () {
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Created, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'groupIdentify'
+            && array_key_exists('first_month_offer_ends_at', $job->payload['properties'])
+            && $job->payload['properties']['first_month_offer_ends_at'] === null;
+    });
+});
+
+test('subscription cancellation updates the account group after Cashier marks it ended', function () {
+    $this->account->subscription()->markAsCanceled();
+    $this->payload['data']['object']['status'] = 'canceled';
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Cancelled, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'groupIdentify'
+            && $job->payload['properties']['subscription_status'] === 'canceled'
+            && $job->payload['properties']['has_active_subscription'] === false;
+    });
+});
+
+test('scheduled cancellation is canceled while access remains active during the grace period', function () {
+    $this->account->subscription()->update(['ends_at' => now()->addWeek()]);
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Updated, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'groupIdentify'
+            && $job->payload['properties']['subscription_status'] === 'canceled'
+            && $job->payload['properties']['has_active_subscription'] === true;
+    });
+});
+
+test('updated event carries the scheduled cancellation', function () {
+    $cancelAt = now()->addWeek()->startOfSecond();
+    $this->payload['data']['object']['cancel_at_period_end'] = true;
+    $this->payload['data']['object']['cancel_at'] = $cancelAt->timestamp;
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Updated, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job) use ($cancelAt): bool {
+        return $job->method === 'capture'
+            && $job->payload['properties']['cancel_at_period_end'] === true
+            && $job->payload['properties']['cancel_at'] === $cancelAt->toIso8601String()
+            && ! array_key_exists('cancel_reason', $job->payload['properties']);
+    });
+});
+
+test('account group exposes cancel_at_period_end and cancel_at from the stored subscription', function () {
+    $cancelAt = now()->addWeek()->startOfSecond();
+    $this->account->subscriptions()->update(['ends_at' => $cancelAt]);
+    $this->payload['data']['object']['cancel_at_period_end'] = false;
+    $this->payload['data']['object']['cancel_at'] = null;
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Updated, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job) use ($cancelAt): bool {
+        return $job->method === 'groupIdentify'
+            && $job->payload['properties']['cancel_at_period_end'] === true
+            && $job->payload['properties']['cancel_at'] === $cancelAt->toIso8601String();
+    });
+});
+
+test('cancelled event carries reason and feedback', function () {
+    $this->payload['data']['object']['status'] = 'canceled';
+    $this->payload['data']['object']['cancellation_details'] = [
+        'reason' => 'cancellation_requested',
+        'feedback' => 'too_expensive',
+    ];
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Cancelled, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'capture'
+            && $job->payload['properties']['cancel_reason'] === 'cancellation_requested'
+            && $job->payload['properties']['cancel_feedback'] === 'too_expensive';
+    });
+});
+
+test('a stale scheduled cancellation in the payload does not reach the group', function () {
+    $this->payload['data']['object']['cancel_at_period_end'] = true;
+    $this->payload['data']['object']['cancel_at'] = now()->addWeek()->timestamp;
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Updated, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'groupIdentify'
+            && $job->payload['properties']['cancel_at_period_end'] === false
+            && $job->payload['properties']['cancel_at'] === null;
+    });
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'capture'
+            && $job->payload['properties']['cancel_at_period_end'] === true;
+    });
+});
+
+test('resuming a scheduled cancellation clears cancel_at on the group', function () {
+    $this->payload['data']['object']['cancel_at_period_end'] = false;
+    $this->payload['data']['object']['cancel_at'] = null;
+    Queue::fake();
+
+    (new TrackBilling((string) $this->account->id, BillingEvent::Updated, $this->payload))
+        ->handle(app(PostHogService::class));
+
+    Queue::assertPushed(SendEvent::class, function (SendEvent $job): bool {
+        return $job->method === 'groupIdentify'
+            && $job->payload['properties']['cancel_at_period_end'] === false
+            && array_key_exists('cancel_at', $job->payload['properties'])
+            && $job->payload['properties']['cancel_at'] === null;
+    });
+});
+
 test('handle does not forward persona — it is already an identified person property', function () {
     $this->user->update(['persona' => Persona::Agency->value]);
     Queue::fake();
@@ -72,7 +241,8 @@ test('handle forwards previousPlan as a property when supplied', function () {
         ->handle(app(PostHogService::class));
 
     Queue::assertPushed(SendEvent::class, function ($job) {
-        return $job->payload['properties']['previous_plan'] === 'Starter';
+        return $job->method === 'capture'
+            && $job->payload['properties']['previous_plan'] === 'Starter';
     });
 });
 
@@ -142,9 +312,8 @@ test('handle logs locally but still does not push a PostHog network call in the 
     Queue::fake();
     Bus::fake([SyncUser::class]);
 
-    Log::shouldReceive('info')->once()->withArgs(
-        fn ($message) => $message === 'PostHogService: capture',
-    );
+    Log::shouldReceive('info')->once()->withArgs(fn ($message) => $message === 'PostHogService: capture');
+    Log::shouldReceive('info')->once()->withArgs(fn ($message) => $message === 'PostHogService: groupIdentify');
 
     (new TrackBilling((string) $this->account->id, BillingEvent::Created, $this->payload))
         ->handle(app(PostHogService::class));

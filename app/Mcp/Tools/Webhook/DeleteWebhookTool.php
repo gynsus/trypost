@@ -7,7 +7,6 @@ namespace App\Mcp\Tools\Webhook;
 use App\Actions\Webhook\DeleteWebhook;
 use App\Mcp\Concerns\AuthorizesMcpTool;
 use App\Mcp\Concerns\ResolvesWorkspaceWebhook;
-use App\Mcp\Requests\Webhook\WebhookIdRequest;
 use App\Models\Webhook;
 use App\Models\Workspace;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
@@ -17,8 +16,12 @@ use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
-#[IsDestructive]
+#[IsReadOnly(false)]
+#[IsDestructive(true)]
+#[IsOpenWorld(false)]
 #[Description('Delete a webhook and its delivery logs permanently. This cannot be undone.')]
 class DeleteWebhookTool extends Tool
 {
@@ -27,22 +30,22 @@ class DeleteWebhookTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace(
-            $request,
-            'manageWebhooks',
-            'Not authorized to manage webhooks.',
-        );
+        $workspace = $this->currentWorkspace($request);
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
         }
 
-        $validated = $request->validate(WebhookIdRequest::rules());
+        $validated = $request->validate(['webhook_id' => ['required', 'string', 'uuid']]);
 
         $webhook = $this->webhookInWorkspace($workspace, data_get($validated, 'webhook_id'));
 
         if (! $webhook instanceof Webhook) {
             return $webhook;
+        }
+
+        if ($denied = $this->denyUnlessCan($request, 'delete', $webhook, 'Webhook not found.')) {
+            return $denied;
         }
 
         DeleteWebhook::execute($webhook);

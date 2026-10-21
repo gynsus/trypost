@@ -2,10 +2,12 @@
 
 declare(strict_types=1);
 
-use App\Enums\UserWorkspace\Role;
+use App\Enums\PostHog\ApiKeyEvent;
+use App\Jobs\PostHog\CaptureAccountEvent;
 use App\Models\AccessToken;
 use App\Models\User;
 use App\Models\Workspace;
+use Illuminate\Support\Facades\Queue;
 
 function createApiKeyApiToken(array $overrides = []): array
 {
@@ -30,7 +32,7 @@ test('list api keys', function () {
     );
 
     $response->assertOk();
-    $response->assertJsonCount(3);
+    $response->assertJsonCount(3, 'data');
 });
 
 test('list api keys excludes revoked and other-workspace tokens', function () {
@@ -55,7 +57,7 @@ test('list api keys excludes revoked and other-workspace tokens', function () {
     $this->withHeaders(['Authorization' => 'Bearer '.$result['plain_token']])
         ->getJson(route('api.api-keys.index'))
         ->assertOk()
-        ->assertJsonCount(1)
+        ->assertJsonCount(1, 'data')
         ->assertJsonMissing(['id' => $revoked->id])
         ->assertJsonMissing(['id' => $other->id]);
 });
@@ -67,7 +69,7 @@ test('list api keys excludes workspace-bound mcp oauth grants', function () {
     $this->withHeaders(['Authorization' => 'Bearer '.$result['plain_token']])
         ->getJson(route('api.api-keys.index'))
         ->assertOk()
-        ->assertJsonCount(1)
+        ->assertJsonCount(1, 'data')
         ->assertJsonMissing(['id' => $oauth->id]);
 });
 
@@ -105,7 +107,7 @@ test('create api key returns plain token', function () {
 test('workspace members cannot manage api keys through the api', function () {
     $result = createApiKeyApiToken();
     $member = User::factory()->create(['account_id' => $result['user']->account_id]);
-    $result['workspace']->members()->attach($member->id, ['role' => Role::Member->value]);
+    $result['workspace']->members()->attach($member->id, membershipPivot('member'));
     $member->update(['current_workspace_id' => $result['workspace']->id]);
     $plainToken = passportToken($member, $result['workspace']);
 
@@ -244,4 +246,32 @@ it('validates api key name max length', function () {
         ])
         ->assertUnprocessable()
         ->assertJsonValidationErrors(['name']);
+});
+
+test('creating an api key through the api tracks api_key.created', function () {
+    enablePostHog();
+    Queue::fake([CaptureAccountEvent::class]);
+    $result = createApiKeyApiToken();
+
+    $this->withHeaders(['Authorization' => "Bearer {$result['plain_token']}"])
+        ->postJson(route('api.api-keys.store'), ['name' => 'CI/CD Token'], ['HTTP_HOST' => 'api.trypost.test'])
+        ->assertCreated();
+
+    Queue::assertPushed(CaptureAccountEvent::class, fn (CaptureAccountEvent $job) => $job->event === ApiKeyEvent::Created
+        && $job->distinctId === (string) $result['user']->id
+        && $job->accountId === (string) $result['workspace']->account_id
+        && $job->properties === ['workspace_id' => (string) $result['workspace']->id]);
+});
+
+test('creating an api key through the api still returns the plain token when tracking it fails', function () {
+    enablePostHog();
+    $result = createApiKeyApiToken();
+    failDispatchOf(CaptureAccountEvent::class);
+
+    $this->withHeaders(['Authorization' => "Bearer {$result['plain_token']}"])
+        ->postJson(route('api.api-keys.store'), ['name' => 'CI/CD Token'], ['HTTP_HOST' => 'api.trypost.test'])
+        ->assertCreated()
+        ->assertJsonStructure(['plain_token']);
+
+    expect(AccessToken::where('workspace_id', $result['workspace']->id)->where('name', 'CI/CD Token')->exists())->toBeTrue();
 });

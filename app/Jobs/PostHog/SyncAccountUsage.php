@@ -47,6 +47,7 @@ class SyncAccountUsage implements ShouldQueue
             'name' => $account->name,
             'plan' => $account->plan?->name,
             'plan_slug' => $account->plan?->slug->value,
+            'subscription_status' => $account->subscriptionStatus(),
             'has_active_subscription' => $account->hasActiveSubscription(),
             'is_on_trial' => $account->isOnTrial(),
             'workspaces_count' => $usage['workspaceCount'],
@@ -54,7 +55,6 @@ class SyncAccountUsage implements ShouldQueue
             'social_accounts_count' => $usage['socialAccountCount'],
             'posts_count' => $usage['postCount'],
             'pending_invites_count' => $usage['pendingInviteCount'],
-            'credits_used' => $usage['creditsUsed'],
             'created_at' => $account->created_at?->toIso8601String(),
         ]);
 

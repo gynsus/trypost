@@ -8,8 +8,13 @@ use App\Enums\PostHog\CheckoutEvent;
 use App\Models\Account;
 use App\Support\StripeSubscriptionConversion;
 
-class TrackCheckoutCompleted extends AbstractTrackStripeSubscriptionEvent
+class TrackCheckoutCompleted extends AbstractTrackStripeEvent
 {
+    protected function shouldCapture(Account $account): bool
+    {
+        return filled($account->plan);
+    }
+
     protected function event(): string
     {
         return CheckoutEvent::Completed->value;
@@ -20,6 +25,6 @@ class TrackCheckoutCompleted extends AbstractTrackStripeSubscriptionEvent
      */
     protected function properties(Account $account): array
     {
-        return StripeSubscriptionConversion::propertiesFor($account, $this->payload);
+        return StripeSubscriptionConversion::checkoutPropertiesFor($account, $this->payload);
     }
 }

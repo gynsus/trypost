@@ -3,13 +3,13 @@
 declare(strict_types=1);
 
 use App\Enums\PostPlatform\ContentType;
-use App\Enums\SocialAccount\Platform;
 use App\Exceptions\TokenExpiredException;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Services\Social\LinkCard\LinkCardFetcher;
+use App\Services\Social\LinkCard\LinkCardMetadata;
 use App\Services\Social\LinkedInPagePublisher;
 use Illuminate\Support\Facades\Http;
 
@@ -29,18 +29,12 @@ beforeEach(function () {
         ],
     ]);
 
-    $this->post = Post::factory()->create([
-        'workspace_id' => $this->workspace->id,
+    $this->post = Post::factory()->forAccount($this->socialAccount)->create([
         'user_id' => $this->user->id,
         'content' => 'Hello from our LinkedIn Page!',
-    ]);
-
-    $this->postPlatform = PostPlatform::factory()->create([
-        'post_id' => $this->post->id,
-        'social_account_id' => $this->socialAccount->id,
-        'platform' => Platform::LinkedInPage,
         'content_type' => ContentType::LinkedInPagePost,
     ]);
+    $this->post->setRelation('socialAccount', $this->socialAccount);
 
     $this->publisher = new LinkedInPagePublisher;
 });
@@ -52,7 +46,7 @@ test('linkedin page publisher can publish text-only post', function () {
         ]),
     ]);
 
-    $result = $this->publisher->publish($this->postPlatform);
+    $result = $this->publisher->publish($this->post);
 
     expect($result)->toHaveKey('id');
     expect($result)->toHaveKey('url');
@@ -74,7 +68,7 @@ test('linkedin page publisher uses organization urn', function () {
         ]),
     ]);
 
-    $this->publisher->publish($this->postPlatform);
+    $this->publisher->publish($this->post);
 
     Http::assertSent(function ($request) {
         return $request['author'] === 'urn:li:organization:123456';
@@ -85,7 +79,7 @@ test('linkedin page publisher throws exception when organization id missing', fu
     Http::fake();
     $this->socialAccount->update(['meta' => []]);
 
-    expect(fn () => $this->publisher->publish($this->postPlatform))
+    expect(fn () => $this->publisher->publish($this->post))
         ->toThrow(Exception::class, 'LinkedIn Page organization ID not configured');
 
     // Fail-fast: the missing org id must abort before any LinkedIn request.
@@ -99,7 +93,7 @@ test('linkedin page publisher uses correct headers', function () {
         ]),
     ]);
 
-    $this->publisher->publish($this->postPlatform);
+    $this->publisher->publish($this->post);
 
     Http::assertSent(function ($request) {
         return $request->hasHeader('Authorization')
@@ -117,7 +111,7 @@ test('linkedin page publisher throws exception on api error', function () {
         ], 400),
     ]);
 
-    expect(fn () => $this->publisher->publish($this->postPlatform))
+    expect(fn () => $this->publisher->publish($this->post))
         ->toThrow(Exception::class);
 });
 
@@ -133,7 +127,7 @@ test('linkedin page publisher throws token expired exception on auth error after
         ], 400),
     ]);
 
-    expect(fn () => $this->publisher->publish($this->postPlatform))
+    expect(fn () => $this->publisher->publish($this->post))
         ->toThrow(TokenExpiredException::class);
 });
 
@@ -151,7 +145,7 @@ test('linkedin page publisher refreshes token when expired', function () {
         ]),
     ]);
 
-    $this->publisher->publish($this->postPlatform);
+    $this->publisher->publish($this->post);
 
     Http::assertSent(function ($request) {
         return str_contains($request->url(), 'oauth/v2/accessToken');
@@ -167,7 +161,7 @@ test('linkedin page publisher throws exception when no refresh token available',
         'refresh_token' => null,
     ]);
 
-    expect(fn () => $this->publisher->publish($this->postPlatform))
+    expect(fn () => $this->publisher->publish($this->post))
         ->toThrow(TokenExpiredException::class, 'No refresh token available for LinkedIn Page account');
 });
 
@@ -181,7 +175,7 @@ test('linkedin page publisher throws TokenExpiredException when refresh_token is
         ], 400),
     ]);
 
-    expect(fn () => $this->publisher->publish($this->postPlatform))
+    expect(fn () => $this->publisher->publish($this->post))
         ->toThrow(TokenExpiredException::class, 'The refresh token is invalid');
 });
 
@@ -194,7 +188,7 @@ test('linkedin page publisher handles empty content', function () {
         ]),
     ]);
 
-    $result = $this->publisher->publish($this->postPlatform);
+    $result = $this->publisher->publish($this->post);
 
     expect($result['id'])->toBe('urn:li:share:1234567890');
 
@@ -212,7 +206,7 @@ test('linkedin page publisher builds feed url from the post id regardless of use
         ]),
     ]);
 
-    $result = $this->publisher->publish($this->postPlatform);
+    $result = $this->publisher->publish($this->post);
 
     expect($result['url'])->toBe('https://www.linkedin.com/feed/update/urn:li:share:1234567890');
 })->with([
@@ -225,7 +219,7 @@ test('linkedin page publisher returns a null url when the response has no post i
         config('trypost.platforms.linkedin-page.api').'/rest/posts' => Http::response(null, 201),
     ]);
 
-    $result = $this->publisher->publish($this->postPlatform);
+    $result = $this->publisher->publish($this->post);
 
     expect($result['url'])->toBeNull();
 });
@@ -269,7 +263,7 @@ test('linkedin page publisher can publish post with image using organization urn
         return Http::response('fake-image-content', 200);
     });
 
-    $result = $this->publisher->publish($this->postPlatform);
+    $result = $this->publisher->publish($this->post);
 
     expect($result['id'])->toBe('urn:li:share:9999999999');
     expect($result['url'])->toBe('https://www.linkedin.com/feed/update/urn:li:share:9999999999');
@@ -318,7 +312,7 @@ test('linkedin page publisher publishes a multi-image carousel with image ids un
         return Http::response('fake-image-content', 200);
     });
 
-    $result = $this->publisher->publish($this->postPlatform);
+    $result = $this->publisher->publish($this->post);
 
     expect($result['id'])->toBe('urn:li:share:orgcarousel');
     expect($result['url'])->toBe('https://www.linkedin.com/feed/update/urn:li:share:orgcarousel');
@@ -340,7 +334,7 @@ test('linkedin page publisher publishes a multi-image carousel with image ids un
 });
 
 test('linkedin page publisher can publish a document (pdf carousel) using organization urn', function () {
-    $this->postPlatform->update([
+    $this->post->update([
         'content_type' => ContentType::LinkedInPagePost,
         'meta' => ['document_title' => 'Company Deck'],
     ]);
@@ -385,7 +379,7 @@ test('linkedin page publisher can publish a document (pdf carousel) using organi
         return Http::response('fake-pdf-bytes', 200);
     });
 
-    $result = $this->publisher->publish($this->postPlatform);
+    $result = $this->publisher->publish($this->post);
 
     expect($result['id'])->toBe('urn:li:share:orgdoc999');
     expect($result['url'])->toBe('https://www.linkedin.com/feed/update/urn:li:share:orgdoc999');
@@ -403,7 +397,7 @@ test('linkedin page publisher can publish a document (pdf carousel) using organi
 });
 
 test('linkedin page publisher throws and does not post when document processing fails', function () {
-    $this->postPlatform->update(['content_type' => ContentType::LinkedInPagePost]);
+    $this->post->update(['content_type' => ContentType::LinkedInPagePost]);
     $this->post->update([
         'media' => [[
             'id' => 'doc-media-1', 'path' => 'media/2026-01/company-deck.pdf',
@@ -432,7 +426,7 @@ test('linkedin page publisher throws and does not post when document processing 
         return Http::response('fake-pdf-bytes', 200);
     });
 
-    expect(fn () => $this->publisher->publish($this->postPlatform))
+    expect(fn () => $this->publisher->publish($this->post))
         ->toThrow(Exception::class, 'LinkedIn Page document processing failed');
 
     Http::assertNotSent(fn ($request) => str_contains($request->url(), '/rest/posts'));
@@ -443,14 +437,43 @@ test('linkedin page publisher keeps links intact', function () {
 
     $this->post->update(['content' => 'New post: https://acme.com/blog']);
 
+    $this->mock(LinkCardFetcher::class)->shouldReceive('fetch')->once()->andReturn(null);
+
     Http::fake([
         config('trypost.platforms.linkedin-page.api').'/rest/posts' => Http::response(null, 201, [
             'x-restli-id' => 'urn:li:share:1234567890',
         ]),
     ]);
 
-    $this->publisher->publish($this->postPlatform);
+    $this->publisher->publish($this->post);
 
     Http::assertSent(fn ($request) => str_contains($request->url(), '/rest/posts')
         && $request['commentary'] === 'New post: https://acme.com/blog');
+});
+
+test('linkedin page publisher sends the article card under the organization', function () {
+    $this->post->update(['content' => 'Read this https://example.com/article']);
+
+    $this->mock(LinkCardFetcher::class)
+        ->shouldReceive('fetch')
+        ->once()
+        ->andReturn(new LinkCardMetadata(
+            uri: 'https://example.com/article',
+            title: 'The Article',
+            description: 'A great read',
+            imageUrl: null,
+        ));
+
+    Http::fake([
+        config('trypost.platforms.linkedin-page.api').'/rest/posts' => Http::response(null, 201, [
+            'x-restli-id' => 'urn:li:share:orgArticle',
+        ]),
+    ]);
+
+    $this->publisher->publish($this->post);
+
+    Http::assertSent(fn ($request) => str_contains($request->url(), '/rest/posts')
+        && $request['author'] === 'urn:li:organization:123456'
+        && $request['content']['article']['source'] === 'https://example.com/article'
+        && $request['content']['article']['title'] === 'The Article');
 });

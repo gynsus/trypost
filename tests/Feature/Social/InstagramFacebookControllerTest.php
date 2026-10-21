@@ -4,22 +4,20 @@ declare(strict_types=1);
 
 use App\Enums\SocialAccount\Platform;
 use App\Enums\SocialAccount\Status;
-use App\Enums\UserWorkspace\Role;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Support\Social\PendingConnection;
 use Illuminate\Support\Facades\Http;
 use Inertia\Testing\AssertableInertia;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\User as SocialiteUser;
 
 beforeEach(function () {
-    Http::preventStrayRequests();
-
     $this->user = User::factory()->create();
     $this->workspace = Workspace::factory()->create(['user_id' => $this->user->id]);
     $this->user->update(['current_workspace_id' => $this->workspace->id]);
-    $this->workspace->members()->attach($this->user->id, ['role' => Role::Member->value]);
+    $this->workspace->members()->attach($this->user->id, membershipPivot('member'));
 });
 
 test('instagram-facebook authorize url reopens the page selection', function () {
@@ -49,13 +47,11 @@ test('instagram-facebook connect redirects to oauth provider', function () {
 
     $response->assertRedirect('https://www.facebook.com/v25.0/dialog/oauth?test=1');
 
-    expect(session('social_connect_workspace'))->toBe($this->workspace->id);
+    expect(PendingConnection::current()?->workspaceId())->toBe($this->workspace->id);
 });
 
 test('instagram-facebook callback follows accounts pagination and shows picker', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -117,18 +113,16 @@ test('instagram-facebook callback follows accounts pagination and shows picker',
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertRedirect(route('app.social.instagram-facebook.select-page'));
-    expect(session('instagram_facebook_oauth.pages'))->toHaveCount(2)
-        ->and(data_get(session('instagram_facebook_oauth.pages'), '0.ig_id'))->toBe('ig_1')
-        ->and(data_get(session('instagram_facebook_oauth.pages'), '1.ig_id'))->toBe('ig_2');
+    $response->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+    expect(PendingConnection::current()->identities())->toHaveCount(2)
+        ->and(data_get(PendingConnection::current()->identities(), '0.platform_user_id'))->toBe('ig_1')
+        ->and(data_get(PendingConnection::current()->identities(), '1.platform_user_id'))->toBe('ig_2');
 
     Http::assertSentCount(7); // /me + /me/permissions + 2 accounts pages + /me/businesses + 2 IG lookups
 });
 
 test('instagram-facebook callback connects page when first accounts response is empty', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -177,8 +171,8 @@ test('instagram-facebook callback connects page when first accounts response is 
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+    $response->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -189,9 +183,7 @@ test('instagram-facebook callback connects page when first accounts response is 
 });
 
 test('instagram-facebook callback still connects when the instagram profile lookup times out', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -228,8 +220,8 @@ test('instagram-facebook callback still connects when the instagram profile look
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+    $response->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -241,9 +233,7 @@ test('instagram-facebook callback still connects when the instagram profile look
 });
 
 test('instagram-facebook callback skips pages without instagram across paginated results', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -299,8 +289,8 @@ test('instagram-facebook callback skips pages without instagram across paginated
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+    $response->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -311,9 +301,7 @@ test('instagram-facebook callback skips pages without instagram across paginated
 });
 
 test('instagram-facebook callback fails without connecting when accounts pagination is incomplete', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -355,45 +343,27 @@ test('instagram-facebook callback fails without connecting when accounts paginat
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', false));
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('message', __('accounts.popup_callback.error_connecting')));
+    $response->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+
+    expect(socialConnectFailure())->toBe('error_connecting');
 
     expect($this->workspace->socialAccounts()->where('platform', Platform::InstagramFacebook)->count())->toBe(0);
 });
 
-test('instagram-facebook select expires the pending session after a successful pick', function () {
-    config()->set('trypost.self_hosted', true);
-
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-        'instagram_facebook_oauth' => [
-            'user_token' => 'user-token',
-            'reconnect_id' => null,
-            'pages' => [
-                [
-                    'page_id' => 'page-1',
-                    'page_name' => 'My Page',
-                    'page_access_token' => 'page-token',
-                    'ig_id' => 'ig-new',
-                    'ig_username' => 'mybiz',
-                    'ig_described' => true,
-                    'ig_name' => 'My Biz',
-                    'ig_picture' => null,
-                ],
-            ],
-        ],
+test('instagram-facebook finish forgets the pending connection after a successful pick', function () {
+    startSocialConnect($this->workspace, Platform::InstagramFacebook)->offer([
+        PendingConnection::identity(Platform::InstagramFacebook, 'ig-new', 'My Biz', 'mybiz', null, 'profile', [
+            'username' => 'mybiz',
+            'display_name' => 'My Biz',
+            'access_token' => 'page-token',
+            'scopes' => ['instagram_content_publish'],
+            'meta' => ['page_id' => 'page-1', 'page_name' => 'My Page'],
+        ]),
     ]);
 
-    $response = $this->actingAs($this->user)->post(route('app.social.instagram-facebook.select'), [
-        'page_id' => 'page-1',
-    ]);
+    $this->actingAs($this->user);
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page
-        ->component('accounts/PopupCallback')
-        ->where('success', true)
-    );
+    assertFinishedOnChannel(finishSocialConnect(Platform::InstagramFacebook));
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -402,14 +372,7 @@ test('instagram-facebook select expires the pending session after a successful p
         'username' => 'mybiz',
     ]);
 
-    $this->actingAs($this->user)
-        ->get(route('app.social.instagram-facebook.select-page'))
-        ->assertOk()
-        ->assertInertia(fn (AssertableInertia $page) => $page
-            ->component('accounts/PopupCallback')
-            ->where('success', false)
-            ->where('message', __('accounts.popup_callback.session_expired'))
-        );
+    expect(PendingConnection::current())->toBeNull();
 });
 
 test('instagram-facebook reconnect updates the original card via connectIdentity', function () {
@@ -421,36 +384,19 @@ test('instagram-facebook reconnect updates the original card via connectIdentity
         'access_token' => 'expired-token',
     ]);
 
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-        'instagram_facebook_oauth' => [
-            'user_token' => 'user-token',
-            'reconnect_id' => $account->id,
-            'pages' => [
-                [
-                    'page_id' => 'page-1',
-                    'page_name' => 'My Page',
-                    'page_access_token' => 'fresh-token',
-                    'ig_id' => 'ig-old',
-                    'ig_username' => 'mybiz',
-                    'ig_described' => true,
-                    'ig_name' => 'My Biz',
-                    'ig_picture' => null,
-                ],
-            ],
-        ],
+    startSocialConnect($this->workspace, Platform::InstagramFacebook, $account)->offer([
+        PendingConnection::identity(Platform::InstagramFacebook, 'ig-old', 'My Biz', 'mybiz', null, 'profile', [
+            'username' => 'mybiz',
+            'display_name' => 'My Biz',
+            'access_token' => 'fresh-token',
+            'scopes' => ['instagram_content_publish'],
+            'meta' => ['page_id' => 'page-1', 'page_name' => 'My Page'],
+        ]),
     ]);
 
-    $response = $this->actingAs($this->user)->post(route('app.social.instagram-facebook.select'), [
-        'page_id' => 'page-1',
-    ]);
+    $this->actingAs($this->user);
 
-    $response->assertOk();
-    $response->assertInertia(fn (AssertableInertia $page) => $page
-        ->component('accounts/PopupCallback')
-        ->where('success', true)
-        ->where('message', __('accounts.popup_callback.reconnected'))
-    );
+    finishSocialConnect(Platform::InstagramFacebook)->assertInertiaFlash('connectedChannel.created', false);
 
     $account->refresh();
 
@@ -459,26 +405,20 @@ test('instagram-facebook reconnect updates the original card via connectIdentity
         ->and($account->access_token)->toBe('fresh-token');
 });
 
-test('instagram-facebook select page returns popup callback when the session expired', function () {
+test('instagram-facebook confirmation page without a pending connection says it expired', function () {
     $this->actingAs($this->user)
-        ->get(route('app.social.instagram-facebook.select-page'))
-        ->assertOk()
-        ->assertInertia(fn (AssertableInertia $page) => $page
-            ->component('accounts/PopupCallback')
-            ->where('success', false)
-            ->where('message', __('accounts.popup_callback.session_expired'))
-        );
+        ->get(route('app.social.connect.show', Platform::InstagramFacebook))
+        ->assertInertia(fn (AssertableInertia $page) => $page->where('state', 'expired'));
 });
 
 test('instagram-facebook callback hides an instagram already connected standalone', function () {
-
     SocialAccount::factory()->create([
         'workspace_id' => $this->workspace->id,
         'platform' => Platform::Instagram,
         'platform_user_id' => 'shared-ig',
     ]);
 
-    session(['social_connect_workspace' => $this->workspace->id]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -516,8 +456,65 @@ test('instagram-facebook callback hides an instagram already connected standalon
 
     $this->actingAs($this->user)
         ->get(route('app.social.instagram-facebook.callback'))
-        ->assertOk()
-        ->assertInertia(fn (AssertableInertia $page) => $page->where('success', false)->where('message', __('accounts.popup_callback.all_connected')));
+        ->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+
+    expect(socialConnectFailure())->toBe('all_connected');
+
+    expect($this->workspace->socialAccounts()
+        ->where('platform', Platform::InstagramFacebook->value)
+        ->exists())->toBeFalse()
+        ->and($this->workspace->socialAccounts()->count())->toBe(1);
+});
+
+test('instagram-facebook callback hides a standalone instagram whose login reports another id', function () {
+    SocialAccount::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Instagram,
+        'platform_user_id' => 'app-scoped-ig',
+        'meta' => ['ig_user_id' => 'shared-ig'],
+    ]);
+
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
+
+    $socialiteUser = Mockery::mock(SocialiteUser::class);
+    $socialiteUser->token = 'test-user-token';
+
+    Socialite::shouldReceive('driver')
+        ->with('facebook')
+        ->andReturn(Mockery::mock()
+            ->shouldReceive('usingGraphVersion')->andReturnSelf()
+            ->shouldReceive('redirectUrl')->andReturnSelf()
+            ->shouldReceive('user')->andReturn($socialiteUser)
+            ->getMock());
+
+    $graphApi = config('trypost.platforms.instagram-facebook.graph_api');
+
+    Http::fake([
+        "{$graphApi}/me/permissions*" => Http::response(['data' => [['permission' => 'pages_show_list', 'status' => 'granted']]], 200),
+        "{$graphApi}/me?*" => Http::response(['id' => 'facebook_user_123', 'name' => 'User'], 200),
+        "{$graphApi}/me/businesses*" => Http::response(['data' => []], 200),
+        "{$graphApi}/me/accounts*" => Http::response([
+            'data' => [
+                [
+                    'id' => 'page-1',
+                    'name' => 'Shared Page',
+                    'access_token' => 'page-token',
+                    'instagram_business_account' => ['id' => 'shared-ig'],
+                ],
+            ],
+        ], 200),
+        "{$graphApi}/*" => Http::response([
+            'id' => 'shared-ig',
+            'username' => 'shared',
+            'name' => 'Shared',
+        ], 200),
+    ]);
+
+    $this->actingAs($this->user)
+        ->get(route('app.social.instagram-facebook.callback'))
+        ->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+
+    expect(socialConnectFailure())->toBe('all_connected');
 
     expect($this->workspace->socialAccounts()
         ->where('platform', Platform::InstagramFacebook->value)
@@ -526,9 +523,7 @@ test('instagram-facebook callback hides an instagram already connected standalon
 });
 
 test('instagram via facebook connects a page reached through a business portfolio', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->shouldReceive('getId')->andReturn('facebook_user_123');
@@ -569,7 +564,7 @@ test('instagram via facebook connects a page reached through a business portfoli
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     $this->assertDatabaseHas('social_accounts', [
         'workspace_id' => $this->workspace->id,
@@ -581,9 +576,7 @@ test('instagram via facebook connects a page reached through a business portfoli
 });
 
 test('instagram via facebook describes every page in rounds without serialising them', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->shouldReceive('getId')->andReturn('facebook_user_123');
@@ -616,16 +609,14 @@ test('instagram via facebook describes every page in rounds without serialising 
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertRedirect(route('app.social.instagram-facebook.select-page'));
-    expect(session('instagram_facebook_oauth.pages'))->toHaveCount(45);
+    $response->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+    expect(PendingConnection::current()->identities())->toHaveCount(45);
 
     Http::assertSentCount(4 + 45);
 });
 
 test('instagram via facebook says the permission is missing when meta lists a page without a token', function () {
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->shouldReceive('getId')->andReturn('facebook_user_123');
@@ -655,20 +646,17 @@ test('instagram via facebook says the permission is missing when meta lists a pa
 
     $response = $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
 
-    $response->assertInertia(fn (AssertableInertia $page) => $page
-        ->where('success', false)
-        ->where('message', __('accounts.popup_callback.pages_missing_permission')));
+    expect(socialConnectFailure())->toBe('pages_missing_permission');
 });
 
 test('instagram via facebook does not describe a page it is about to discard', function () {
-
     SocialAccount::factory()->create([
         'workspace_id' => $this->workspace->id,
         'platform' => Platform::Instagram,
         'platform_user_id' => 'ig_taken',
     ]);
 
-    session(['social_connect_workspace' => $this->workspace->id]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -705,8 +693,9 @@ test('instagram via facebook does not describe a page it is about to discard', f
     ]);
 
     $this->actingAs($this->user)
-        ->get(route('app.social.instagram-facebook.callback'))
-        ->assertInertia(fn (AssertableInertia $page) => $page->where('success', true));
+        ->get(route('app.social.instagram-facebook.callback'));
+
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     Http::assertNotSent(fn ($request) => str_contains($request->url(), '/ig_taken'));
 
@@ -714,7 +703,7 @@ test('instagram via facebook does not describe a page it is about to discard', f
 });
 
 test('instagram via facebook falls back to the username when meta returns a null name', function () {
-    session(['social_connect_workspace' => $this->workspace->id]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -743,6 +732,7 @@ test('instagram via facebook falls back to the username when meta returns a null
     ]);
 
     $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     expect(SocialAccount::where('platform_user_id', 'ig_1')->sole()->display_name)->toBe('only_a_handle');
 });
@@ -750,7 +740,7 @@ test('instagram via facebook falls back to the username when meta returns a null
 test('instagram via facebook falls back to the page name when the lookups run out of time', function () {
     config()->set('trypost.meta_page_walk_seconds', 0);
 
-    session(['social_connect_workspace' => $this->workspace->id]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -778,6 +768,7 @@ test('instagram via facebook falls back to the page name when the lookups run ou
     ]);
 
     $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     $account = SocialAccount::where('platform_user_id', 'ig_1')->sole();
 
@@ -798,10 +789,7 @@ test('a reconnect keeps the handle it had when the lookup never ran', function (
         'avatar_url' => 'avatars/kept.jpg',
     ]);
 
-    session([
-        'social_connect_workspace' => $this->workspace->id,
-        'social_reconnect_id' => $account->id,
-    ]);
+    startSocialConnect($this->workspace->id, Platform::InstagramFacebook, $account->id);
 
     $socialiteUser = Mockery::mock(SocialiteUser::class);
     $socialiteUser->token = 'test-user-token';
@@ -829,10 +817,169 @@ test('a reconnect keeps the handle it had when the lookup never ran', function (
     ]);
 
     $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect();
 
     $account->refresh();
 
     expect($account->username)->toBe('the_handle_we_had')
         ->and($account->getRawOriginal('avatar_url'))->toBe('avatars/kept.jpg')
         ->and($account->access_token)->toBe('fresh-token');
+});
+
+test('reconnecting a standalone instagram card through facebook moves it to instagram via facebook', function () {
+    $account = SocialAccount::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Instagram,
+        'platform_user_id' => 'app-scoped-1',
+        'username' => 'mybiz',
+        'access_token' => 'instagram-token',
+        'meta' => ['account_type' => 'BUSINESS', 'ig_user_id' => 'ig-pro-1'],
+    ]);
+    Http::fake();
+
+    startSocialConnect($this->workspace, Platform::InstagramFacebook, $account)->offer([
+        PendingConnection::identity(Platform::InstagramFacebook, 'ig-pro-1', 'My Biz', 'mybiz', null, 'profile', [
+            'username' => 'mybiz',
+            'display_name' => 'My Biz',
+            'access_token' => 'page-token',
+            'scopes' => ['instagram_content_publish'],
+            'meta' => ['page_id' => 'page-1', 'page_name' => 'My Page'],
+        ]),
+    ]);
+
+    $this->actingAs($this->user);
+
+    finishSocialConnect(Platform::InstagramFacebook)->assertInertiaFlash('connectedChannel.created', false);
+
+    $account->refresh();
+
+    expect($this->workspace->socialAccounts()->count())->toBe(1)
+        ->and($account->platform)->toBe(Platform::InstagramFacebook)
+        ->and($account->platform_user_id)->toBe('ig-pro-1')
+        ->and($account->access_token)->toBe('page-token');
+});
+
+test('reconnecting through facebook still refuses another instagram account', function () {
+    $account = SocialAccount::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Instagram,
+        'platform_user_id' => 'app-scoped-1',
+        'meta' => ['ig_user_id' => 'ig-pro-1'],
+    ]);
+
+    startSocialConnect($this->workspace, Platform::InstagramFacebook, $account)->offer([
+        PendingConnection::identity(Platform::InstagramFacebook, 'ig-pro-2', 'Other', 'other', null, 'profile', [
+            'username' => 'other',
+            'access_token' => 'page-token',
+            'scopes' => ['instagram_content_publish'],
+        ]),
+    ]);
+
+    $this->actingAs($this->user);
+    finishSocialConnect(Platform::InstagramFacebook)->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+
+    expect(socialConnectFailure())->toBe('wrong_account')
+        ->and($this->workspace->socialAccounts()->count())->toBe(1)
+        ->and($account->fresh()->platform)->toBe(Platform::Instagram)
+        ->and($account->fresh()->platform_user_id)->toBe('app-scoped-1');
+});
+
+test('a facebook callback reconnecting a standalone instagram card that finds another instagram account says the page is missing', function () {
+    $account = SocialAccount::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Instagram,
+        'platform_user_id' => 'app-scoped-1',
+        'meta' => ['ig_user_id' => 'ig-pro-1'],
+    ]);
+
+    startSocialConnect($this->workspace, Platform::InstagramFacebook, $account);
+
+    $socialiteUser = Mockery::mock(SocialiteUser::class);
+    $socialiteUser->token = 'test-user-token';
+
+    Socialite::shouldReceive('driver')
+        ->with('facebook')
+        ->andReturn(Mockery::mock()
+            ->shouldReceive('usingGraphVersion')->andReturnSelf()
+            ->shouldReceive('redirectUrl')->andReturnSelf()
+            ->shouldReceive('user')->andReturn($socialiteUser)
+            ->getMock());
+
+    $graphApi = config('trypost.platforms.instagram-facebook.graph_api');
+
+    Http::fake([
+        "{$graphApi}/me/permissions*" => Http::response(['data' => [['permission' => 'pages_show_list', 'status' => 'granted']]], 200),
+        "{$graphApi}/me?*" => Http::response(['id' => 'facebook_user_123', 'name' => 'User'], 200),
+        "{$graphApi}/me/businesses*" => Http::response(['data' => []], 200),
+        "{$graphApi}/me/accounts*" => Http::response(['data' => [[
+            'id' => 'page-2',
+            'name' => 'Other Page',
+            'access_token' => 'page-token',
+            'instagram_business_account' => ['id' => 'ig-pro-2'],
+        ]]], 200),
+        "{$graphApi}/*" => Http::response(['id' => 'ig-pro-2', 'username' => 'other', 'name' => 'Other'], 200),
+    ]);
+
+    $this->actingAs($this->user)
+        ->get(route('app.social.instagram-facebook.callback'))
+        ->assertRedirect(route('app.social.connect.show', Platform::InstagramFacebook));
+
+    expect(socialConnectFailure())->toBe('page_not_found')
+        ->and($this->workspace->socialAccounts()->count())->toBe(1)
+        ->and($account->fresh()->platform)->toBe(Platform::Instagram)
+        ->and($account->fresh()->platform_user_id)->toBe('app-scoped-1');
+});
+
+test('a facebook callback reconnecting an instagram card connected before its account id was stored asks instagram for it', function () {
+    $account = SocialAccount::factory()->create([
+        'workspace_id' => $this->workspace->id,
+        'platform' => Platform::Instagram,
+        'platform_user_id' => 'app-scoped-1',
+        'access_token' => 'instagram-token',
+        'token_expires_at' => now()->addMonth(),
+        'meta' => ['account_type' => 'BUSINESS'],
+    ]);
+
+    startSocialConnect($this->workspace, Platform::InstagramFacebook, $account);
+
+    $socialiteUser = Mockery::mock(SocialiteUser::class);
+    $socialiteUser->token = 'test-user-token';
+
+    Socialite::shouldReceive('driver')
+        ->with('facebook')
+        ->andReturn(Mockery::mock()
+            ->shouldReceive('usingGraphVersion')->andReturnSelf()
+            ->shouldReceive('redirectUrl')->andReturnSelf()
+            ->shouldReceive('user')->andReturn($socialiteUser)
+            ->getMock());
+
+    $graphApi = config('trypost.platforms.instagram-facebook.graph_api');
+    $instagramApi = config('trypost.platforms.instagram.graph_api');
+
+    Http::fake([
+        "{$instagramApi}/me?*" => Http::response(['id' => 'app-scoped-1', 'username' => 'mybiz', 'user_id' => 'ig-pro-1'], 200),
+        "{$graphApi}/me?*" => Http::response(['id' => 'facebook_user_123', 'name' => 'User'], 200),
+        "{$graphApi}/me/permissions*" => Http::response(['data' => [['permission' => 'pages_show_list', 'status' => 'granted']]], 200),
+        "{$graphApi}/me/businesses*" => Http::response(['data' => []], 200),
+        "{$graphApi}/me/accounts*" => Http::response(['data' => [[
+            'id' => 'page-1',
+            'name' => 'My Page',
+            'access_token' => 'page-token',
+            'instagram_business_account' => ['id' => 'ig-pro-1'],
+        ]]], 200),
+        "{$graphApi}/ig-pro-1*" => Http::response(['id' => 'ig-pro-1', 'username' => 'mybiz', 'name' => 'My Biz'], 200),
+    ]);
+
+    $this->actingAs($this->user)->get(route('app.social.instagram-facebook.callback'));
+
+    expect(socialConnectFailure())->toBeNull();
+
+    finishSocialConnect(Platform::InstagramFacebook)->assertInertiaFlash('connectedChannel.created', false);
+
+    $account->refresh();
+
+    expect($this->workspace->socialAccounts()->count())->toBe(1)
+        ->and($account->platform)->toBe(Platform::InstagramFacebook)
+        ->and($account->platform_user_id)->toBe('ig-pro-1')
+        ->and($account->access_token)->toBe('page-token');
 });

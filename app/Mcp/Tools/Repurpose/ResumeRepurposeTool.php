@@ -18,7 +18,13 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
+#[IsReadOnly(false)]
+#[IsDestructive(true)]
+#[IsOpenWorld(true)]
 #[Description('Resume a paused repurpose from where it stopped.')]
 class ResumeRepurposeTool extends Tool
 {
@@ -26,7 +32,7 @@ class ResumeRepurposeTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace($request, 'manageRepurposes', 'Not authorized to manage repurposes.');
+        $workspace = $this->currentWorkspace($request);
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
@@ -37,6 +43,10 @@ class ResumeRepurposeTool extends Tool
 
         if (! $repurpose instanceof Repurpose) {
             return $repurpose;
+        }
+
+        if ($denied = $this->denyUnlessCan($request, 'update', $repurpose, 'Repurpose not found.')) {
+            return $denied;
         }
 
         try {

@@ -7,8 +7,17 @@ return [
 
     'back' => '뒤로',
 
+    'unsaved_changes' => [
+
+        'title' => '변경 사항을 삭제할까요?',
+
+        'description' => '이 게시물의 변경 사항이 저장되지 않았습니다. 지금 나가면 사라집니다.',
+
+        'discard' => '삭제',
+
+    ],
+
     'confirm_modal' => [
-        'cannot_be_undone' => '이 작업은 되돌릴 수 없습니다.',
         'type' => '입력',
         'to_confirm' => '하여 확인하세요.',
         'copy_to_clipboard' => '클립보드에 복사',
@@ -59,11 +68,26 @@ return [
     'cancel' => '취소',
     'clear' => '지우기',
     'close' => '닫기',
+    'more' => '더보기',
+    'learn_more' => '자세히 알아보기',
+    'play' => '재생',
+    'loading' => '불러오는 중...',
     'loading_more' => '더 불러오는 중...',
 
     'actions' => [
         'copy' => '복사',
         'copied' => '복사됨',
         'copy_failed' => '클립보드에 복사하지 못했습니다',
+    ],
+
+    'media_lightbox' => [
+        'title' => '미디어 미리보기',
+        'previous' => '이전',
+        'next' => '다음',
+        'zoom_in' => '확대',
+        'zoom_out' => '축소',
+        'counter' => ':current / :total',
+        'go_to' => '항목 :number 보기',
+        'open' => '미리보기 열기',
     ],
 ];

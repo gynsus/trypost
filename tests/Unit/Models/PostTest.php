@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use App\Enums\Post\Status as PostStatus;
 use App\Models\Post;
-use App\Models\PostPlatform;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
@@ -32,23 +31,28 @@ test('post belongs to user', function () {
     expect($post->user->id)->toBe($this->user->id);
 });
 
-test('post has many post platforms', function () {
+test('post belongs to its channel', function () {
+    $socialAccount = SocialAccount::factory()->linkedin()->create([
+        'workspace_id' => $this->workspace->id,
+    ]);
+
+    $post = Post::factory()->forAccount($socialAccount)->create([
+        'user_id' => $this->user->id,
+    ]);
+
+    expect($post->socialAccount->id)->toBe($socialAccount->id)
+        ->and($post->hasChannel())->toBeTrue()
+        ->and($post->hasDestination())->toBeTrue();
+});
+
+test('a draft without a channel has no destination', function () {
     $post = Post::factory()->create([
         'workspace_id' => $this->workspace->id,
         'user_id' => $this->user->id,
     ]);
 
-    $socialAccount = SocialAccount::factory()->linkedin()->create([
-        'workspace_id' => $this->workspace->id,
-    ]);
-
-    $postPlatform = PostPlatform::factory()->create([
-        'post_id' => $post->id,
-        'social_account_id' => $socialAccount->id,
-    ]);
-
-    expect($post->postPlatforms)->toHaveCount(1);
-    expect($post->postPlatforms->first()->id)->toBe($postPlatform->id);
+    expect($post->hasChannel())->toBeFalse()
+        ->and($post->hasDestination())->toBeFalse();
 });
 
 test('post can be marked as publishing', function () {
@@ -71,18 +75,6 @@ test('post can be marked as published', function () {
     $post->markAsPublished();
 
     expect($post->fresh()->status)->toBe(PostStatus::Published);
-    expect($post->fresh()->published_at)->not->toBeNull();
-});
-
-test('post can be marked as partially published', function () {
-    $post = Post::factory()->scheduled()->create([
-        'workspace_id' => $this->workspace->id,
-        'user_id' => $this->user->id,
-    ]);
-
-    $post->markAsPartiallyPublished();
-
-    expect($post->fresh()->status)->toBe(PostStatus::PartiallyPublished);
     expect($post->fresh()->published_at)->not->toBeNull();
 });
 
@@ -183,3 +175,20 @@ test('post scope failed returns only failed posts', function () {
     expect($posts)->toHaveCount(1);
     expect($posts->first()->id)->toBe($failed->id);
 });
+
+test('the cover media is the first image or video, skipping documents', function (array $media, ?string $expected) {
+    expect((new Post(['media' => $media]))->coverMedia()?->id)->toBe($expected);
+})->with([
+    'video after a document' => [[
+        ['id' => 'deck', 'path' => 'medias/deck.pdf', 'url' => 'https://cdn.trypost.test/medias/deck.pdf', 'type' => 'document'],
+        ['id' => 'reel', 'path' => 'medias/reel.mp4', 'url' => 'https://cdn.trypost.test/medias/reel.mp4', 'type' => 'video'],
+    ], 'reel'],
+    'first image' => [[
+        ['id' => 'first', 'path' => 'medias/a.jpg', 'url' => 'https://cdn.trypost.test/medias/a.jpg', 'type' => 'image'],
+        ['id' => 'second', 'path' => 'medias/b.jpg', 'url' => 'https://cdn.trypost.test/medias/b.jpg', 'type' => 'image'],
+    ], 'first'],
+    'only a document' => [[
+        ['id' => 'deck', 'path' => 'medias/deck.pdf', 'url' => 'https://cdn.trypost.test/medias/deck.pdf', 'type' => 'document'],
+    ], null],
+    'no media' => [[], null],
+]);

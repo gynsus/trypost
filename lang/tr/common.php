@@ -7,12 +7,21 @@ return [
 
     'back' => 'Geri',
 
+    'unsaved_changes' => [
+
+        'title' => 'Değişiklikler silinsin mi?',
+
+        'description' => 'Bu gönderideki değişiklikler kaydedilmedi. Şimdi çıkarsan kaybolacaklar.',
+
+        'discard' => 'Sil',
+
+    ],
+
     'confirm_modal' => [
-        'cannot_be_undone' => 'Bu işlem geri alınamaz.',
         'type' => 'Yazın:',
         'to_confirm' => 'onaylamak için.',
         'copy_to_clipboard' => 'Panoya kopyala',
-        'delete_keyword' => 'sil',
+        'delete_keyword' => 'SİL',
     ],
 
     'photo_upload' => [
@@ -59,11 +68,26 @@ return [
     'cancel' => 'İptal',
     'clear' => 'Temizle',
     'close' => 'Kapat',
+    'more' => 'Daha fazla',
+    'learn_more' => 'Daha fazla bilgi',
+    'play' => 'Oynat',
+    'loading' => 'Yükleniyor...',
     'loading_more' => 'Daha fazla yükleniyor...',
 
     'actions' => [
         'copy' => 'Kopyala',
         'copied' => 'Kopyalandı',
         'copy_failed' => 'Panoya kopyalanamadı',
+    ],
+
+    'media_lightbox' => [
+        'title' => 'Medya önizlemesi',
+        'previous' => 'Önceki',
+        'next' => 'Sonraki',
+        'zoom_in' => 'Yakınlaştır',
+        'zoom_out' => 'Uzaklaştır',
+        'counter' => ':current / :total',
+        'go_to' => ':number. öğeyi göster',
+        'open' => 'Önizlemeyi aç',
     ],
 ];

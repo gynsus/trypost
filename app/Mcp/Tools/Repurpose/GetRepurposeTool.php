@@ -16,17 +16,21 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
+#[IsReadOnly(true)]
+#[IsDestructive(false)]
+#[IsOpenWorld(false)]
 #[Description('Read one repurpose, including the format it watches, its destinations and the last polling error.')]
-#[IsReadOnly]
 class GetRepurposeTool extends Tool
 {
     use AuthorizesMcpTool, ResolvesWorkspaceRepurpose;
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace($request, 'manageRepurposes', 'Not authorized to manage repurposes.');
+        $workspace = $this->currentWorkspace($request);
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
@@ -37,6 +41,10 @@ class GetRepurposeTool extends Tool
 
         if (! $repurpose instanceof Repurpose) {
             return $repurpose;
+        }
+
+        if ($denied = $this->denyUnlessCan($request, 'view', $repurpose, 'Repurpose not found.')) {
+            return $denied;
         }
 
         return Response::structured((new RepurposeResource($repurpose))->resolve());

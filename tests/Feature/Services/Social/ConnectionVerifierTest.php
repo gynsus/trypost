@@ -5,15 +5,24 @@ declare(strict_types=1);
 use App\Enums\SocialAccount\Status;
 use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\TokenExpiredException;
+use App\Jobs\Analytics\BootstrapAccountAnalytics;
+use App\Jobs\Analytics\CollectAccountDailySnapshot;
 use App\Models\SocialAccount;
 use App\Services\Social\ConnectionVerifier;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+
+beforeEach(function () {
+    Queue::fake([BootstrapAccountAnalytics::class, CollectAccountDailySnapshot::class]);
+});
 
 test('verifies account without refresh when token is not expired', function () {
     Http::fake([
-        config('trypost.platforms.linkedin.api').'/*' => Http::response(['sub' => '123'], 200),
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::response(['sub' => '123'], 200),
     ]);
 
     $account = SocialAccount::factory()->linkedin()->create([
@@ -26,7 +35,7 @@ test('verifies account without refresh when token is not expired', function () {
     expect($result)->toBeTrue();
 
     Http::assertSentCount(1);
-    Http::assertSent(fn ($request) => str_contains($request->url(), config('trypost.platforms.linkedin.api').'/rest/userinfo'));
+    Http::assertSent(fn ($request) => str_contains($request->url(), config('trypost.platforms.linkedin.api').'/v2/userinfo'));
 });
 
 test('refreshes linkedin token before verifying when expired', function () {
@@ -36,7 +45,7 @@ test('refreshes linkedin token before verifying when expired', function () {
             'refresh_token' => 'new_refresh_token',
             'expires_in' => 5184000,
         ], 200),
-        config('trypost.platforms.linkedin.api').'/*' => Http::response(['sub' => '123'], 200),
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::response(['sub' => '123'], 200),
     ]);
 
     $account = SocialAccount::factory()->linkedin()->create([
@@ -78,7 +87,7 @@ test('refreshes x token before verifying when expired', function () {
             'refresh_token' => 'new_refresh_token',
             'expires_in' => 7200,
         ], 200),
-        config('trypost.platforms.x.api').'/users/me' => Http::response(['data' => ['id' => '123']], 200),
+        config('trypost.platforms.x.api').'/users/me*' => Http::response(['data' => ['id' => '123']], 200),
     ]);
 
     $account = SocialAccount::factory()->x()->create([
@@ -98,6 +107,8 @@ test('refreshes x token before verifying when expired', function () {
 test('refreshes bluesky token before verifying when expired', function () {
     Http::fake([
         config('trypost.platforms.bluesky.default_service').'/xrpc/com.atproto.server.refreshSession' => Http::response([
+            'did' => 'did:plc:123',
+            'handle' => 'test.bsky.social',
             'accessJwt' => 'new_access_token',
             'refreshJwt' => 'new_refresh_token',
         ], 200),
@@ -105,6 +116,7 @@ test('refreshes bluesky token before verifying when expired', function () {
     ]);
 
     $account = SocialAccount::factory()->bluesky()->create([
+        'platform_user_id' => 'did:plc:123',
         'token_expires_at' => now()->subHour(),
         'refresh_token' => 'old_refresh_token',
     ]);
@@ -117,6 +129,73 @@ test('refreshes bluesky token before verifying when expired', function () {
 
     Http::assertSent(fn ($request) => str_contains($request->url(), 'refreshSession'));
 });
+
+test('bluesky refresh and reauthentication accept typed sessions without requiring a confirmed email', function (bool $reauthenticate) {
+    $account = SocialAccount::factory()->bluesky()->create([
+        'platform_user_id' => 'did:plc:account',
+        'access_token' => 'old-access',
+        'refresh_token' => 'old-refresh',
+        'meta' => ['identifier' => 'account.bsky.social', 'password' => encrypt('app-password')],
+    ]);
+    $body = [
+        'did' => 'did:plc:account',
+        'handle' => 'account.bsky.social',
+        'accessJwt' => 'new-access',
+        'refreshJwt' => 'new-refresh',
+        'emailConfirmed' => false,
+    ];
+    $service = config('trypost.platforms.bluesky.default_service');
+
+    Http::fake([
+        "{$service}/xrpc/com.atproto.server.refreshSession" => $reauthenticate
+            ? Http::response(['error' => 'ExpiredToken'], 401)
+            : Http::response($body),
+        "{$service}/xrpc/com.atproto.server.createSession" => Http::response($body),
+    ]);
+
+    expect((new ConnectionVerifier)->refreshToken($account))->toBeTrue()
+        ->and($account->fresh()->access_token)->toBe('new-access')
+        ->and($account->fresh()->refresh_token)->toBe('new-refresh')
+        ->and($account->fresh()->status)->toBe(Status::Connected);
+
+    Http::assertSentCount($reauthenticate ? 2 : 1);
+})->with(['refresh' => false, 'reauthentication' => true]);
+
+test('bluesky preserves stored tokens when a renewed session is malformed or belongs to another account', function (array $overrides, bool $reauthenticate) {
+    $account = SocialAccount::factory()->bluesky()->create([
+        'platform_user_id' => 'did:plc:account',
+        'access_token' => 'old-access',
+        'refresh_token' => 'old-refresh',
+        'meta' => ['identifier' => 'account.bsky.social', 'password' => encrypt('app-password')],
+    ]);
+    $body = [
+        'did' => 'did:plc:account',
+        'handle' => 'account.bsky.social',
+        'accessJwt' => 'new-access',
+        'refreshJwt' => 'new-refresh',
+        ...$overrides,
+    ];
+    $service = config('trypost.platforms.bluesky.default_service');
+
+    Http::fake([
+        "{$service}/xrpc/com.atproto.server.refreshSession" => $reauthenticate
+            ? Http::response(['error' => 'ExpiredToken'], 401)
+            : Http::response($body),
+        "{$service}/xrpc/com.atproto.server.createSession" => Http::response($body),
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))->toThrow(PlatformUnavailableException::class)
+        ->and($account->fresh()->access_token)->toBe('old-access')
+        ->and($account->fresh()->refresh_token)->toBe('old-refresh')
+        ->and($account->fresh()->status)->toBe(Status::Connected);
+
+    Http::assertSentCount($reauthenticate ? 2 : 1);
+})->with([
+    'missing token' => [['refreshJwt' => null]],
+    'malformed token' => [['accessJwt' => []]],
+    'other identity' => [['did' => 'did:plc:other']],
+    'missing identity' => [['did' => null]],
+])->with(['refresh' => false, 'reauthentication' => true]);
 
 test('refreshes youtube token before verifying when expired', function () {
     Http::fake([
@@ -161,6 +240,104 @@ test('refreshes tiktok token before verifying when expired', function () {
     expect($result)->toBeTrue();
 
     Http::assertSent(fn ($request) => str_contains($request->url(), config('trypost.platforms.tiktok.api').'/oauth/token'));
+});
+
+test('a tiktok refresh answered with a dead refresh token error expires the account, whatever the status', function (int $status, string $error) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response([
+            'error' => $error,
+            'error_description' => 'Refresh token is invalid or expired.',
+            'log_id' => '20261007182924',
+        ], $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(function (TokenExpiredException $exception) use ($error): void {
+            expect($exception->getMessage())->toBe('Refresh token is invalid or expired.')
+                ->and($exception->platformErrorCode)->toBe($error);
+        });
+
+    expect($account->fresh()->access_token)->toBe('old_token');
+})->with([200, 400])->with(['invalid_grant']);
+
+test('a tiktok refresh answered with a json scalar stays transient', function (int $status) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response('"unexpected"', $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(PlatformUnavailableException::class);
+
+    expect($account->fresh()->access_token)->toBe('old_token');
+})->with([200, 400]);
+
+test('a tiktok refresh answered with any error but invalid_grant stays transient, whatever the status', function (int $status, string $error) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response([
+            'error' => $error,
+            'error_description' => 'Something went wrong.',
+            'log_id' => '20261007182924',
+        ], $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(PlatformUnavailableException::class);
+
+    expect($account->fresh()->access_token)->toBe('old_token');
+})->with([200, 400])->with(['server_error', 'temporarily_unavailable', 'invalid_client', 'invalid_request', 'access_denied']);
+
+test('a tiktok refresh error body with non-string fields never breaks the classification', function (int $status, array $body, string $exception) {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response($body, $status),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))->toThrow($exception);
+})->with([
+    'array error on 200' => [200, ['error' => ['code' => 'x'], 'error_description' => ['a']], PlatformUnavailableException::class],
+    'array description on 200' => [200, ['error' => 'server_error', 'error_description' => ['a']], PlatformUnavailableException::class],
+    'array description on a dead token' => [400, ['error' => 'invalid_grant', 'error_description' => ['a']], TokenExpiredException::class],
+    'array description on a dead token with 200' => [200, ['error' => 'invalid_grant', 'error_description' => ['a']], TokenExpiredException::class],
+]);
+
+test('tiktok refresh answered with 200 and neither a token nor an error stays transient', function () {
+    Http::fake([
+        config('trypost.platforms.tiktok.api').'/oauth/token/' => Http::response(['log_id' => '20261007182924'], 200),
+    ]);
+
+    $account = SocialAccount::factory()->tiktok()->create([
+        'access_token' => 'old_token',
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->refreshToken($account))
+        ->toThrow(PlatformUnavailableException::class);
+
+    expect($account->fresh()->access_token)->toBe('old_token');
 });
 
 test('refreshes pinterest token before verifying when expired', function () {
@@ -238,6 +415,25 @@ test('throws exception when x refresh fails', function () {
     expect(fn () => $verifier->verify($account))
         ->toThrow(TokenExpiredException::class, 'Failed to refresh X token');
 });
+
+test('a refresh failure without a usable error_description falls back to the next message', function (array $body, string $expected) {
+    Http::fake([
+        config('trypost.platforms.linkedin.oauth_api').'/oauth/v2/accessToken' => Http::response($body, 400),
+    ]);
+
+    $account = SocialAccount::factory()->linkedin()->create([
+        'token_expires_at' => now()->subHour(),
+        'refresh_token' => 'old_refresh_token',
+    ]);
+
+    expect(fn () => (new ConnectionVerifier)->verify($account))
+        ->toThrow(fn (TokenExpiredException $exception) => expect($exception->getMessage())->toBe($expected));
+})->with([
+    'empty description' => [['error_description' => '', 'error' => ['message' => 'Refresh token revoked']], 'Refresh token revoked'],
+    'array description' => [['error_description' => ['a'], 'error' => ['message' => 'Refresh token revoked']], 'Refresh token revoked'],
+    'empty description and no message' => [['error_description' => ''], 'Failed to refresh LinkedIn token'],
+    'non-string description and message' => [['error_description' => 42, 'error' => ['message' => ['a']]], 'Failed to refresh LinkedIn token'],
+]);
 
 test('does not refresh facebook token as it uses long-lived tokens', function () {
     Http::fake([
@@ -323,7 +519,7 @@ test('instagram refresh records a 60-day expiry when the response omits expires_
 
 test('does NOT refresh proactively when token still works (lazy refresh)', function () {
     Http::fake([
-        config('trypost.platforms.linkedin.api').'/*' => Http::response(['sub' => '123'], 200),
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::response(['sub' => '123'], 200),
     ]);
 
     // Token is "expiring soon" but access_token still works.
@@ -338,13 +534,13 @@ test('does NOT refresh proactively when token still works (lazy refresh)', funct
 
     // Refresh endpoint must NOT have been called — verify worked without it.
     Http::assertNotSent(fn ($request) => str_contains($request->url(), 'oauth/v2/accessToken'));
-    Http::assertSent(fn ($request) => str_contains($request->url(), config('trypost.platforms.linkedin.api').'/rest/userinfo'));
+    Http::assertSent(fn ($request) => str_contains($request->url(), config('trypost.platforms.linkedin.api').'/v2/userinfo'));
 });
 
 test('refreshes lazily on 401 then retries verify', function () {
     Http::fake([
         // First verify call returns 401, second (after refresh) returns 200.
-        config('trypost.platforms.linkedin.api').'/*' => Http::sequence()
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::sequence()
             ->push(['error' => 'unauthorized'], 401)
             ->push(['sub' => '123'], 200),
         config('trypost.platforms.linkedin.oauth_api').'/oauth/v2/accessToken' => Http::response([
@@ -368,7 +564,7 @@ test('refreshes lazily on 401 then retries verify', function () {
 
 test('throws when verify returns 401 AND refresh also fails', function () {
     Http::fake([
-        config('trypost.platforms.linkedin.api').'/*' => Http::response(['error' => 'unauthorized'], 401),
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::response(['error' => 'unauthorized'], 401),
         config('trypost.platforms.linkedin.oauth_api').'/oauth/v2/accessToken' => Http::response(['error' => 'invalid_grant'], 400),
     ]);
 
@@ -389,7 +585,7 @@ test('forces refresh when token is hard-expired', function () {
             'refresh_token' => 'new_refresh_token',
             'expires_in' => 5184000,
         ], 200),
-        config('trypost.platforms.linkedin.api').'/*' => Http::response(['sub' => '123'], 200),
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::response(['sub' => '123'], 200),
     ]);
 
     $account = SocialAccount::factory()->linkedin()->create([
@@ -457,7 +653,7 @@ test('does not disconnect when a concurrent refresh already rotated the token (l
         // Our stale refresh_token is rejected — a concurrent process already used it.
         config('trypost.platforms.x.api').'/oauth2/token' => Http::response(['error' => 'invalid_grant'], 400),
         // But the access_token the winning refresh persisted still works.
-        config('trypost.platforms.x.api').'/users/me' => Http::response(['data' => ['id' => '123']], 200),
+        config('trypost.platforms.x.api').'/users/me*' => Http::response(['data' => ['id' => '123']], 200),
     ]);
 
     $account = SocialAccount::factory()->x()->create([
@@ -493,7 +689,7 @@ test('does not disconnect when the verify after a refresh 401s once but a fresh 
         // ...but the verify that follows 401s once (the sub-commit window where a
         // lock-skipped refresh reloads a not-yet-persisted token) before
         // succeeding on the reload + retry.
-        config('trypost.platforms.x.api').'/users/me' => Http::sequence()
+        config('trypost.platforms.x.api').'/users/me*' => Http::sequence()
             ->push(['error' => 'unauthorized'], 401)
             ->push(['data' => ['id' => '123']], 200),
     ]);
@@ -701,6 +897,9 @@ test('threads verify treats a dead token reported under a non-190 code as genuin
     // from issue #230, which the old code === 190-only check let through
     // as a silent, un-flagged "still valid".
     Http::fake([
+        config('trypost.platforms.threads.auth_api').'/refresh_access_token*' => Http::response([
+            'error' => ['message' => 'Error validating access token', 'type' => 'OAuthException', 'code' => 190],
+        ], 400),
         config('trypost.platforms.threads.graph_api').'/me*' => Http::response([
             'error' => ['message' => 'The requested resource does not exist', 'type' => 'OAuthException', 'code' => 100],
         ], 400),
@@ -822,6 +1021,9 @@ test('facebook verify treats a non-JSON failure body as platform unavailable, no
 
 test('instagram verify treats a dead token reported under a non-190 code as genuinely expired', function () {
     Http::fake([
+        config('trypost.platforms.instagram.auth_api').'/refresh_access_token*' => Http::response([
+            'error' => ['message' => 'Error validating access token', 'type' => 'OAuthException', 'code' => 190],
+        ], 400),
         config('trypost.platforms.instagram.graph_api').'/me*' => Http::response([
             'error' => ['message' => 'The requested resource does not exist', 'type' => 'OAuthException', 'code' => 100],
         ], 400),
@@ -886,6 +1088,9 @@ test('threads verify treats a failed response with a valid but unrecognized JSON
     // an unrecognized 4xx shape still disconnects rather than being
     // silently ignored, which is the exact bug this class replaced.
     Http::fake([
+        config('trypost.platforms.threads.auth_api').'/refresh_access_token*' => Http::response([
+            'error' => ['message' => 'Error validating access token', 'type' => 'OAuthException', 'code' => 190],
+        ], 400),
         config('trypost.platforms.threads.graph_api').'/me*' => Http::response(['data' => ['id' => '123']], 400),
     ]);
 
@@ -940,7 +1145,7 @@ test('throws PlatformUnavailableException when the discord guild lookup fails tr
 
 test('linkedin verify treats a 5xx as platform unavailable, not a disconnect', function () {
     Http::fake([
-        config('trypost.platforms.linkedin.api').'/rest/userinfo' => Http::response(['message' => 'Internal Server Error'], 500),
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::response(['message' => 'Internal Server Error'], 500),
     ]);
 
     $account = SocialAccount::factory()->linkedin()->create();
@@ -952,7 +1157,7 @@ test('linkedin verify treats a 5xx as platform unavailable, not a disconnect', f
 test('linkedin verify throws TokenExpiredException on a bare 401', function () {
     Http::fake([
         config('trypost.platforms.linkedin.oauth_api').'/oauth/v2/accessToken' => Http::response(['error' => 'invalid_grant'], 400),
-        config('trypost.platforms.linkedin.api').'/rest/userinfo' => Http::response(['message' => 'Unauthorized'], 401),
+        config('trypost.platforms.linkedin.api').'/v2/userinfo' => Http::response(['message' => 'Unauthorized'], 401),
     ]);
 
     $account = SocialAccount::factory()->linkedin()->create();
@@ -986,7 +1191,7 @@ test('linkedin page verify throws TokenExpiredException on a bare 401', function
 
 test('x verify treats a 5xx as platform unavailable, not a disconnect', function () {
     Http::fake([
-        config('trypost.platforms.x.api').'/users/me' => Http::response(['title' => 'Internal Server Error'], 503),
+        config('trypost.platforms.x.api').'/users/me*' => Http::response(['title' => 'Internal Server Error'], 503),
     ]);
 
     $account = SocialAccount::factory()->x()->create();
@@ -998,7 +1203,7 @@ test('x verify treats a 5xx as platform unavailable, not a disconnect', function
 test('x verify throws TokenExpiredException on a bare 401', function () {
     Http::fake([
         config('trypost.platforms.x.api').'/oauth2/token' => Http::response(['error' => 'invalid_grant'], 400),
-        config('trypost.platforms.x.api').'/users/me' => Http::response(['title' => 'Unauthorized'], 401),
+        config('trypost.platforms.x.api').'/users/me*' => Http::response(['title' => 'Unauthorized'], 401),
     ]);
 
     $account = SocialAccount::factory()->x()->create();
@@ -1010,7 +1215,7 @@ test('x verify throws TokenExpiredException on a bare 401', function () {
 test('x verify throws TokenExpiredException on an unsupported-authentication error type', function () {
     Http::fake([
         config('trypost.platforms.x.api').'/oauth2/token' => Http::response(['error' => 'invalid_grant'], 400),
-        config('trypost.platforms.x.api').'/users/me' => Http::response([
+        config('trypost.platforms.x.api').'/users/me*' => Http::response([
             'type' => 'https://api.twitter.com/2/problems/unsupported-authentication',
             'title' => 'Unsupported Authentication',
         ], 403),
@@ -1305,4 +1510,118 @@ test('refreshToken persists a rotated google business refresh token', function (
     app(ConnectionVerifier::class)->refreshToken($account);
 
     expect($account->fresh()->refresh_token)->toBe('refresh-rotated');
+});
+
+test('a refresh that loses the race reuses the token the winner stored instead of replaying a used refresh token', function () {
+    Http::fake([
+        config('trypost.platforms.x.api').'/*' => Http::response(['error' => 'invalid_request'], 400),
+    ]);
+    $account = SocialAccount::factory()->x()->createQuietly([
+        'access_token' => 'stale-access',
+        'refresh_token' => 'used-refresh',
+        'token_expires_at' => now()->subMinute(),
+    ]);
+    $loser = SocialAccount::query()->findOrFail($account->id);
+    SocialAccount::query()->findOrFail($account->id)->update([
+        'access_token' => 'winner-access',
+        'refresh_token' => 'winner-refresh',
+        'token_expires_at' => now()->addHours(2),
+    ]);
+
+    expect((new ConnectionVerifier)->refreshToken($loser))->toBeFalse()
+        ->and($loser->access_token)->toBe('winner-access')
+        ->and($loser->refresh_token)->toBe('winner-refresh');
+    Http::assertNothingSent();
+});
+
+test('instagram login verify remembers the professional account id of an account connected before it was stored', function () {
+    Http::fake([
+        config('trypost.platforms.instagram.graph_api').'/me*' => Http::response(['id' => 'app-scoped-1', 'username' => 'trypost', 'user_id' => '17841400000000001']),
+    ]);
+
+    $account = SocialAccount::factory()->instagram()->create([
+        'token_expires_at' => now()->addDays(30),
+        'meta' => ['username' => 'trypost'],
+    ]);
+
+    expect((new ConnectionVerifier)->verify($account))->toBeTrue()
+        ->and($account->fresh()->meta)->toEqual(['username' => 'trypost', 'ig_user_id' => '17841400000000001']);
+    Http::assertSent(fn ($request): bool => str_contains($request->url(), 'fields=id%2Cusername%2Cuser_id'));
+});
+
+test('instagram via facebook verify asks for no user_id, which a page token does not have', function () {
+    Http::fake([
+        config('trypost.platforms.instagram-facebook.graph_api').'/me*' => Http::response(['id' => 'page-1', 'username' => 'trypost']),
+    ]);
+
+    $account = SocialAccount::factory()->instagram()->create([
+        'platform' => 'instagram-facebook',
+        'token_expires_at' => now()->addDays(30),
+        'meta' => [],
+    ]);
+
+    expect((new ConnectionVerifier)->verify($account))->toBeTrue()
+        ->and(data_get($account->fresh()->meta, 'ig_user_id'))->toBeNull();
+    Http::assertSent(fn ($request): bool => str_contains($request->url(), 'fields=id%2Cusername&'));
+});
+
+test('remembering the instagram account id keeps meta saved meanwhile by a reconnect', function () {
+    Http::fake([
+        config('trypost.platforms.instagram.graph_api').'/me*' => Http::response(['id' => 'app-scoped-1', 'username' => 'trypost', 'user_id' => '17841400000000001']),
+    ]);
+    $account = SocialAccount::factory()->instagram()->create([
+        'token_expires_at' => now()->addDays(30),
+        'meta' => ['username' => 'trypost'],
+    ]);
+    SocialAccount::query()->whereKey($account->id)->update(['meta->account_type' => 'BUSINESS']);
+
+    (new ConnectionVerifier)->verify($account);
+
+    expect($account->fresh()->meta)->toEqual(['username' => 'trypost', 'account_type' => 'BUSINESS', 'ig_user_id' => '17841400000000001']);
+});
+
+test('remembering the instagram account id works on an account with empty meta', function (?array $meta) {
+    Http::fake([
+        config('trypost.platforms.instagram.graph_api').'/me*' => Http::response(['id' => 'app-scoped-1', 'username' => 'trypost', 'user_id' => '17841400000000001']),
+    ]);
+    $account = SocialAccount::factory()->instagram()->create([
+        'token_expires_at' => now()->addDays(30),
+        'meta' => $meta,
+    ]);
+
+    expect((new ConnectionVerifier)->verify($account))->toBeTrue()
+        ->and($account->fresh()->meta)->toEqual(['ig_user_id' => '17841400000000001']);
+})->with(['no meta' => [null], 'empty meta' => [[]]]);
+
+test('instagram login verify leaves meta alone when the profile has no professional account id', function () {
+    Http::fake([
+        config('trypost.platforms.instagram.graph_api').'/me*' => Http::response(['id' => 'app-scoped-1', 'username' => 'trypost']),
+    ]);
+    $account = SocialAccount::factory()->instagram()->create([
+        'token_expires_at' => now()->addDays(30),
+        'meta' => ['username' => 'trypost'],
+    ]);
+
+    expect((new ConnectionVerifier)->verify($account))->toBeTrue()
+        ->and($account->fresh()->meta)->toEqual(['username' => 'trypost']);
+});
+
+test('instagram login verify writes nothing when the professional account id is already stored', function () {
+    Http::fake([
+        config('trypost.platforms.instagram.graph_api').'/me*' => Http::response(['id' => 'app-scoped-1', 'username' => 'trypost', 'user_id' => 17841400000000001]),
+    ]);
+    $account = SocialAccount::factory()->instagram()->create([
+        'token_expires_at' => now()->addDays(30),
+        'meta' => ['username' => 'trypost', 'ig_user_id' => '17841400000000001'],
+    ]);
+    $metaWrites = [];
+    DB::listen(function (QueryExecuted $query) use (&$metaWrites): void {
+        if (str_starts_with(strtolower($query->sql), 'update') && str_contains($query->sql.json_encode($query->bindings), 'ig_user_id')) {
+            $metaWrites[] = $query->sql;
+        }
+    });
+
+    expect((new ConnectionVerifier)->verify($account))->toBeTrue()
+        ->and($metaWrites)->toBe([])
+        ->and($account->fresh()->meta)->toEqual(['username' => 'trypost', 'ig_user_id' => '17841400000000001']);
 });

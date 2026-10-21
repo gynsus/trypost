@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { Head, router } from '@inertiajs/vue3';
-import { trans } from 'laravel-vue-i18n';
+import { Head, Link, router } from '@inertiajs/vue3';
+import { IconCheck } from '@tabler/icons-vue';
 import { ref } from 'vue';
 
 import { Avatar } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import WorkspaceUpgradeDialog from '@/components/workspaces/WorkspaceUpgradeDialog.vue';
+import { useWorkspaceAbilities } from '@/composables/useWorkspaceAbilities';
 import { useWorkspaceLimit } from '@/composables/useWorkspaceLimit';
-import { useWorkspaceRole } from '@/composables/useWorkspaceRole';
 import AuthLayout from '@/layouts/AuthLayout.vue';
+import { home } from '@/routes/app';
 import { switchMethod } from '@/routes/app/workspaces';
 
 interface Workspace {
@@ -27,7 +27,7 @@ interface Props {
 
 const props = defineProps<Props>();
 
-const { canCreateWorkspace } = useWorkspaceRole();
+const { canCreateWorkspace } = useWorkspaceAbilities();
 const { createOrUpgrade } = useWorkspaceLimit(() => props.workspaces.length);
 
 const upgradeDialogOpen = ref(false);
@@ -42,10 +42,12 @@ const switchToWorkspace = (workspace: Workspace): void => {
     );
 };
 
+const openUpgradeDialog = (): void => {
+    upgradeDialogOpen.value = true;
+};
+
 const handleCreateWorkspace = (): void => {
-    createOrUpgrade(() => {
-        upgradeDialogOpen.value = true;
-    });
+    createOrUpgrade(openUpgradeDialog);
 };
 </script>
 
@@ -56,57 +58,83 @@ const handleCreateWorkspace = (): void => {
         :title="$t('workspaces.select_title')"
         :description="$t('workspaces.select_description')"
     >
-        <div class="space-y-3">
-            <div
-                v-for="workspace in workspaces"
-                :key="workspace.id"
-                class="flex cursor-pointer items-center gap-3 rounded-xl border-2 border-foreground bg-card p-4 shadow-2xs transition-all hover:-translate-y-0.5 hover:shadow-md"
-                :class="
-                    workspace.id === currentWorkspaceId ? 'bg-violet-100' : ''
-                "
-                @click="switchToWorkspace(workspace)"
+        <div class="flex flex-col gap-4">
+            <ul
+                class="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border bg-card"
+                data-testid="workspaces-list"
             >
-                <Avatar
-                    :src="workspace.logo_url"
-                    :name="workspace.name"
-                    class="size-10 shrink-0 rounded-lg border-2 border-foreground"
-                    fallback-class="bg-muted text-muted-foreground"
-                />
-                <div class="min-w-0 flex-1">
-                    <p class="truncate font-medium">{{ workspace.name }}</p>
-                    <p class="text-xs text-muted-foreground">
-                        {{
-                            trans('workspaces.connections', {
-                                count: String(workspace.social_accounts_count),
-                            })
-                        }}
-                        ·
-                        {{
-                            trans('workspaces.posts', {
-                                count: String(workspace.posts_count),
-                            })
-                        }}
-                    </p>
-                </div>
-                <Badge
-                    v-if="workspace.id === currentWorkspaceId"
-                    variant="secondary"
-                    class="shrink-0"
+                <li v-for="workspace in workspaces" :key="workspace.id">
+                    <button
+                        type="button"
+                        class="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-control hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                        :aria-current="
+                            workspace.id === currentWorkspaceId
+                                ? 'true'
+                                : undefined
+                        "
+                        :data-testid="`workspaces-item-${workspace.id}`"
+                        @click="switchToWorkspace(workspace)"
+                    >
+                        <Avatar
+                            :src="workspace.logo_url"
+                            :name="workspace.name"
+                            class="size-9 shrink-0 rounded-lg"
+                            fallback-class="text-sm bg-primary-subtle text-primary-text font-bold"
+                        />
+                        <span class="grid min-w-0 flex-1 gap-0.5">
+                            <span
+                                class="truncate text-sm leading-5 font-semibold text-foreground"
+                                >{{ workspace.name }}</span
+                            >
+                            <span class="truncate text-xs text-muted-foreground">
+                                {{
+                                    $t('workspaces.connections', {
+                                        count: String(
+                                            workspace.social_accounts_count,
+                                        ),
+                                    })
+                                }}
+                                ·
+                                {{
+                                    $t('workspaces.posts', {
+                                        count: String(workspace.posts_count),
+                                    })
+                                }}
+                            </span>
+                        </span>
+                        <IconCheck
+                            v-if="workspace.id === currentWorkspaceId"
+                            class="size-4 shrink-0 text-foreground"
+                            stroke-width="2.5"
+                            :aria-label="$t('workspaces.current')"
+                            :data-testid="`workspaces-current-${workspace.id}`"
+                        />
+                    </button>
+                </li>
+            </ul>
+
+            <div class="flex flex-col gap-2">
+                <Button
+                    v-if="canCreateWorkspace"
+                    class="w-full"
+                    data-testid="workspaces-create"
+                    @click="handleCreateWorkspace"
                 >
-                    {{ $t('workspaces.current') }}
-                </Badge>
+                    {{ $t('workspaces.create.submit') }}
+                </Button>
+
+                <Button
+                    v-if="currentWorkspaceId"
+                    as-child
+                    variant="outline"
+                    class="w-full bg-card"
+                >
+                    <Link :href="home.url()" data-testid="workspaces-back">
+                        {{ $t('common.back') }}
+                    </Link>
+                </Button>
             </div>
         </div>
-
-        <Button
-            v-if="canCreateWorkspace"
-            variant="outline"
-            class="w-full"
-            data-testid="workspaces-create"
-            @click="handleCreateWorkspace"
-        >
-            {{ $t('workspaces.create.submit') }}
-        </Button>
 
         <WorkspaceUpgradeDialog v-model:open="upgradeDialogOpen" />
     </AuthLayout>

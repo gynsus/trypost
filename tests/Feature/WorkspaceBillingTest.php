@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use App\Enums\Plan\Slug as PlanSlug;
-use App\Enums\UserWorkspace\Role;
 use App\Models\Account;
 use App\Models\Plan;
 use App\Models\User;
@@ -21,7 +20,7 @@ beforeEach(function () {
         'account_id' => $this->account->id,
         'user_id' => $this->user->id,
     ]);
-    $this->workspace->members()->attach($this->user->id, ['role' => Role::Member->value]);
+    $this->workspace->members()->attach($this->user->id, membershipPivot('member'));
     $this->user->update(['current_workspace_id' => $this->workspace->id]);
 });
 
@@ -81,7 +80,7 @@ test('billing page is not accessible by non-owner member', function () {
     $member = User::factory()->create([
         'account_id' => $this->account->id,
     ]);
-    $this->workspace->members()->attach($member->id, ['role' => Role::Member->value]);
+    $this->workspace->members()->attach($member->id, membershipPivot('member'));
     $member->update(['current_workspace_id' => $this->workspace->id]);
 
     $this->account->subscriptions()->create([
@@ -108,8 +107,8 @@ test('stripe email returns account owner email', function () {
     expect($this->account->stripeEmail())->toBe($this->user->email);
 });
 
-test('stripe name returns account name', function () {
-    expect($this->account->stripeName())->toBe($this->account->name);
+test('stripe name returns account owner name', function () {
+    expect($this->account->stripeName())->toBe($this->user->name);
 });
 
 test('creating an additional workspace redirects to billing without an active subscription', function () {
@@ -147,6 +146,6 @@ test('store creates an additional workspace with no count limit', function () {
         'name' => 'Second workspace',
     ]);
 
-    $response->assertRedirect(route('app.accounts'));
+    $response->assertRedirect(route('app.posts.index'));
     expect($this->account->workspaces()->count())->toBe(2);
 });

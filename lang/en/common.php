@@ -7,12 +7,21 @@ return [
 
     'back' => 'Back',
 
+    'unsaved_changes' => [
+
+        'title' => 'Discard changes?',
+
+        'description' => 'Your changes to this post haven\'t been saved. If you leave now, they\'ll be lost.',
+
+        'discard' => 'Discard',
+
+    ],
+
     'confirm_modal' => [
-        'cannot_be_undone' => 'This cannot be undone.',
         'type' => 'Type',
         'to_confirm' => 'to confirm.',
         'copy_to_clipboard' => 'Copy to clipboard',
-        'delete_keyword' => 'delete',
+        'delete_keyword' => 'DELETE',
     ],
 
     'photo_upload' => [
@@ -59,11 +68,26 @@ return [
     'cancel' => 'Cancel',
     'clear' => 'Clear',
     'close' => 'Close',
+    'more' => 'More',
+    'learn_more' => 'Learn more',
+    'play' => 'Play',
+    'loading' => 'Loading...',
     'loading_more' => 'Loading more...',
 
     'actions' => [
         'copy' => 'Copy',
         'copied' => 'Copied',
         'copy_failed' => 'Failed to copy to clipboard',
+    ],
+
+    'media_lightbox' => [
+        'title' => 'Media preview',
+        'previous' => 'Previous',
+        'next' => 'Next',
+        'zoom_in' => 'Zoom in',
+        'zoom_out' => 'Zoom out',
+        'counter' => ':current / :total',
+        'go_to' => 'Show item :number',
+        'open' => 'Open preview',
     ],
 ];

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use App\Enums\UserWorkspace\Role;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Services\Social\Discord\DiscordClient;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
@@ -18,7 +18,7 @@ beforeEach(function () {
 
     $this->user = User::factory()->create();
     $this->workspace = Workspace::factory()->create(['account_id' => $this->user->account_id, 'user_id' => $this->user->id]);
-    $this->workspace->members()->attach($this->user->id, ['role' => Role::Admin->value]);
+    $this->workspace->members()->attach($this->user->id, membershipPivot('admin'));
     $this->user->update(['current_workspace_id' => $this->workspace->id]);
     $this->user->refresh();
 
@@ -134,4 +134,21 @@ test('forbids looking up a discord account in another workspace', function () {
     $this->actingAs($this->user)
         ->getJson(route('app.discord.channels', $other->id))
         ->assertForbidden();
+});
+
+test('the cached channel list is read without asking discord, and only after a lookup filled it', function () {
+    Http::fake([
+        config('trypost.platforms.discord.api').'/guilds/111222333/channels' => Http::response([['id' => '1', 'name' => 'general', 'type' => 0]], 200),
+        config('trypost.platforms.discord.api').'/guilds/111222333/roles' => Http::response([['id' => '111222333', 'permissions' => '3072']], 200),
+        config('trypost.platforms.discord.api').'/guilds/111222333/members/*' => Http::response(['roles' => []], 200),
+    ]);
+    $discord = app(DiscordClient::class);
+
+    expect($discord->cachedChannels('111222333'))->toBeNull();
+    Http::assertNothingSent();
+
+    $channels = $discord->channels('111222333');
+
+    expect($discord->cachedChannels('111222333'))->toBe($channels)
+        ->and($channels)->toBe([['id' => '1', 'name' => 'general']]);
 });

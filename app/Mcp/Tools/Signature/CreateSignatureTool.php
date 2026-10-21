@@ -8,34 +8,34 @@ use App\Actions\Signature\CreateSignature;
 use App\Http\Resources\Api\SignatureResource;
 use App\Mcp\Concerns\AuthorizesMcpTool;
 use App\Models\Workspace;
+use App\Support\Requests\Signature\SignatureRequestRules;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
-#[Description('Create a new signature with a name and content (hashtags, links, custom text, etc.).')]
+#[IsReadOnly(false)]
+#[IsDestructive(false)]
+#[IsOpenWorld(false)]
+#[Description('Create a new signature with a name and content (hashtags, links, custom text, etc.). A signature is not added automatically to any post: append its content to the post content yourself.')]
 class CreateSignatureTool extends Tool
 {
     use AuthorizesMcpTool;
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace(
-            $request,
-            'createPost',
-            'Not authorized to manage signatures.',
-        );
+        $workspace = $this->authorizeCurrentWorkspace($request, 'createPost');
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
         }
 
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'content' => ['required', 'string'],
-        ]);
+        $validated = $request->validate(SignatureRequestRules::rules());
 
         $signature = CreateSignature::execute($workspace, $validated);
 

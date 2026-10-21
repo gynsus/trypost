@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Social;
 
+use App\Actions\SocialAccount\ReadBlueskySession;
+use App\Actions\SocialAccount\SyncXSubscription;
 use App\Enums\SocialAccount\Platform;
 use App\Exceptions\PlatformUnavailableException;
 use App\Exceptions\Social\BlueskyPublishException;
@@ -24,11 +26,24 @@ use App\Services\Social\Telegram\TelegramApi;
 use App\Support\GoogleBusinessResourceName;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class ConnectionVerifier
 {
+    /**
+     * TikTok OAuth errors that mean the refresh token itself is dead and the
+     * user must reconnect: only invalid_grant ("invalid, expired, revoked")
+     * is documented that way. Every other error is ours or temporary.
+     *
+     * @see https://developers.tiktok.com/doc/oauth-error-handling
+     *
+     * @var list<string>
+     */
+    private const array TIKTOK_DEAD_REFRESH_ERRORS = ['invalid_grant'];
+
     /**
      * Read and connect timeouts for a token refresh. Stated explicitly, even
      * though they match the client's defaults, so a change to those cannot
@@ -138,7 +153,7 @@ class ConnectionVerifier
         return blank($token) ? $current : (string) $token;
     }
 
-    private function tokenFrom(?array $data, Platform $platform, string $key = 'access_token'): string
+    private function tokenFrom(mixed $data, Platform $platform, string $key = 'access_token'): string
     {
         $token = data_get($data, $key);
 
@@ -193,7 +208,8 @@ class ConnectionVerifier
             Platform::LinkedIn => $this->verifyLinkedIn($account),
             Platform::LinkedInPage => $this->verifyLinkedInPage($account),
             Platform::X => $this->verifyX($account),
-            Platform::Instagram, Platform::InstagramFacebook => $this->verifyInstagram($account),
+            Platform::Instagram => $this->verifyInstagram($account),
+            Platform::InstagramFacebook => $this->verifyInstagramFacebook($account),
             Platform::Facebook => $this->verifyFacebook($account),
             Platform::Threads => $this->verifyThreads($account),
             Platform::TikTok => $this->verifyTikTok($account),
@@ -254,6 +270,14 @@ class ConnectionVerifier
             if (! $account->platform->hasTokenRefreshFlow()) {
                 // Page tokens, Mastodon and the shared bot tokens have
                 // nothing per-account to refresh.
+                return false;
+            }
+
+            $stored = SocialAccount::query()->find($account->id);
+
+            if ($stored && $stored->refresh_token !== $account->refresh_token) {
+                $account->setRawAttributes($stored->getAttributes(), true);
+
                 return false;
             }
 
@@ -330,17 +354,13 @@ class ConnectionVerifier
         $client = TokenRefreshClient::for(Platform::Bluesky);
 
         try {
+            // refreshSession must be POSTed with NO body: `post()` without data
+            // still sends an empty JSON body, and bsky.social now rejects it
+            // with "A request body was provided when none was expected".
             $response = $client->send(fn () => $this->refreshHttp()->withToken($account->refresh_token)
-                ->post("{$service}/xrpc/".BlueskyLexicon::REFRESH_SESSION));
+                ->send('POST', "{$service}/xrpc/".BlueskyLexicon::REFRESH_SESSION));
 
-            $data = $response->json();
-            $account->update([
-                'access_token' => $this->tokenFrom($data, $account->platform, 'accessJwt'),
-                'refresh_token' => $this->tokenFrom($data, $account->platform, 'refreshJwt'),
-                'token_expires_at' => now()->addHours(2),
-            ]);
-
-            $account->refresh();
+            $this->updateBlueskySession($account, $response);
 
             return;
         } catch (TokenExpiredException) {
@@ -354,14 +374,7 @@ class ConnectionVerifier
                     'password' => decrypt($account->meta['password']),
                 ]));
 
-                $data = $reauth->json();
-                $account->update([
-                    'access_token' => $this->tokenFrom($data, $account->platform, 'accessJwt'),
-                    'refresh_token' => $this->tokenFrom($data, $account->platform, 'refreshJwt'),
-                    'token_expires_at' => now()->addHours(2),
-                ]);
-
-                $account->refresh();
+                $this->updateBlueskySession($account, $reauth);
 
                 return;
             } catch (TokenExpiredException) {
@@ -370,6 +383,23 @@ class ConnectionVerifier
         }
 
         throw new TokenExpiredException('Bluesky session expired');
+    }
+
+    private function updateBlueskySession(SocialAccount $account, Response $response): void
+    {
+        $session = ReadBlueskySession::execute($response);
+
+        if ($session === null || ! $session->hasTokens() || $session->did !== $account->platform_user_id) {
+            throw new PlatformUnavailableException('Bluesky returned an invalid session response.');
+        }
+
+        $account->update([
+            'access_token' => $session->accessToken,
+            'refresh_token' => $session->refreshToken,
+            'token_expires_at' => now()->addHours(2),
+        ]);
+
+        $account->refresh();
     }
 
     private function refreshYouTubeToken(SocialAccount $account): void
@@ -402,15 +432,32 @@ class ConnectionVerifier
             throw new TokenExpiredException('No refresh token available for TikTok account');
         }
 
-        $response = TokenRefreshClient::for(Platform::TikTok)->send(fn () => $this->refreshHttp()->asForm()
-            ->post(config('trypost.platforms.tiktok.api').'/oauth/token/', [
-                'grant_type' => 'refresh_token',
-                'refresh_token' => $account->refresh_token,
-                'client_key' => config('services.tiktok.client_id'),
-                'client_secret' => config('services.tiktok.client_secret'),
-            ]));
+        $response = TokenRefreshClient::for(Platform::TikTok)->send(
+            fn () => $this->refreshHttp()->asForm()
+                ->post(config('trypost.platforms.tiktok.api').'/oauth/token/', [
+                    'grant_type' => 'refresh_token',
+                    'refresh_token' => $account->refresh_token,
+                    'client_key' => config('services.tiktok.client_id'),
+                    'client_secret' => config('services.tiktok.client_secret'),
+                ]),
+            function (mixed $body): bool {
+                self::throwIfDeadTikTokRefresh($body);
+
+                return false;
+            },
+        );
 
         $data = $response->json();
+        self::throwIfDeadTikTokRefresh($data);
+
+        $error = data_get($data, 'error');
+        $description = self::tikTokErrorDescription($data);
+
+        if (filled($error)) {
+            $code = is_string($error) ? $error : 'unrecognized error';
+
+            throw new PlatformUnavailableException(trim("TikTok refresh returned {$code}: {$description}", ': '));
+        }
 
         $account->update([
             'access_token' => $this->tokenFrom($data, $account->platform),
@@ -419,6 +466,33 @@ class ConnectionVerifier
         ]);
 
         $account->refresh();
+    }
+
+    /**
+     * A dead refresh token expires the account with TikTok's error code,
+     * whether TikTok answered it with a 200 or a 4xx.
+     *
+     * @throws TokenExpiredException
+     */
+    private static function throwIfDeadTikTokRefresh(mixed $body): void
+    {
+        $error = is_array($body) ? data_get($body, 'error') : null;
+
+        if (! in_array($error, self::TIKTOK_DEAD_REFRESH_ERRORS, true)) {
+            return;
+        }
+
+        throw new TokenExpiredException(
+            self::tikTokErrorDescription($body) ?? $error,
+            platformErrorCode: $error,
+        );
+    }
+
+    private static function tikTokErrorDescription(mixed $body): ?string
+    {
+        $description = data_get($body, 'error_description');
+
+        return is_string($description) && $description !== '' ? $description : null;
     }
 
     private function refreshPinterestToken(SocialAccount $account): void
@@ -518,14 +592,14 @@ class ConnectionVerifier
         $account->refresh();
     }
 
+    /**
+     * The OpenID Connect userinfo endpoint lives under `/v2`, not the versioned
+     * `/rest` API, so it takes no LinkedIn-Version header.
+     */
     private function verifyLinkedIn(SocialAccount $account): bool
     {
         $response = Http::withToken($account->access_token)
-            ->withHeaders([
-                'X-Restli-Protocol-Version' => '2.0.0',
-                'LinkedIn-Version' => '202601',
-            ])
-            ->get(config('trypost.platforms.linkedin.api').'/rest/userinfo');
+            ->get(config('trypost.platforms.linkedin.api').'/v2/userinfo');
 
         if (LinkedInPublishException::isConfirmedDeadToken($response)) {
             throw new TokenExpiredException('LinkedIn access token is invalid or expired');
@@ -569,13 +643,15 @@ class ConnectionVerifier
     private function verifyX(SocialAccount $account): bool
     {
         $response = Http::withToken($account->access_token)
-            ->get(config('trypost.platforms.x.api').'/users/me');
+            ->get(config('trypost.platforms.x.api').'/users/me', ['user.fields' => SyncXSubscription::USER_FIELDS]);
 
         if (XPublishException::isConfirmedDeadToken($response)) {
             throw new TokenExpiredException('X access token is invalid or expired');
         }
 
         if ($response->successful()) {
+            SyncXSubscription::fromUser($account, (array) $response->json('data', []));
+
             return true;
         }
 
@@ -585,15 +661,35 @@ class ConnectionVerifier
         );
     }
 
+    /**
+     * An Instagram Login token, checked on graph.instagram.com. Its `user_id`
+     * is the professional account id, kept for matching the same account
+     * connected through Facebook.
+     */
     private function verifyInstagram(SocialAccount $account): bool
     {
-        // Basic Instagram tokens hit graph.instagram.com; Instagram via
-        // Facebook Business uses a Facebook Page token, which only validates
-        // against graph.facebook.com — using the wrong endpoint produces a
-        // false-positive "token expired".
-        $baseUrl = $account->platform->instagramGraphBaseUrl();
+        $response = Http::get("{$account->platform->instagramGraphBaseUrl()}/me", [
+            'fields' => 'id,username,user_id',
+            'access_token' => $account->access_token,
+        ]);
 
-        $response = Http::get("{$baseUrl}/me", [
+        if ($response->successful()) {
+            $this->rememberInstagramAccountId($account, $response->json('user_id'));
+
+            return true;
+        }
+
+        throw GraphError::classifyVerifyFailure($response, 'Instagram');
+    }
+
+    /**
+     * An Instagram account connected through Facebook holds a Page token, which
+     * only validates on graph.facebook.com (graph.instagram.com reports it as
+     * expired). Its `/me` is the Page, which has no `user_id`.
+     */
+    private function verifyInstagramFacebook(SocialAccount $account): bool
+    {
+        $response = Http::get("{$account->platform->instagramGraphBaseUrl()}/me", [
             'fields' => 'id,username',
             'access_token' => $account->access_token,
         ]);
@@ -603,6 +699,31 @@ class ConnectionVerifier
         }
 
         throw GraphError::classifyVerifyFailure($response, 'Instagram');
+    }
+
+    /**
+     * Keeps the Instagram professional account id of an Instagram Login
+     * account (older accounts were connected before it was stored), so a
+     * reconnect through Facebook matches it without asking Instagram. The key
+     * is added to the meta read again under a row lock, so meta saved
+     * meanwhile (a reconnect) is kept, and `updated_at` does not move.
+     */
+    private function rememberInstagramAccountId(SocialAccount $account, mixed $instagramAccountId): void
+    {
+        $id = (string) $instagramAccountId;
+
+        if (blank($id) || data_get($account->meta, 'ig_user_id') === $id) {
+            return;
+        }
+
+        $account->meta = DB::transaction(function () use ($account, $id): array {
+            $stored = SocialAccount::query()->lockForUpdate()->findOrFail($account->getKey());
+            $stored->meta = [...$stored->meta ?? [], 'ig_user_id' => $id];
+            SocialAccount::withoutTimestamps(fn () => $stored->saveQuietly());
+
+            return $stored->meta;
+        });
+        $account->syncOriginalAttribute('meta');
     }
 
     private function verifyFacebook(SocialAccount $account): bool

@@ -7,6 +7,8 @@ namespace App\Jobs\PostHog;
 use App\Enums\PostHog\BillingEvent;
 use App\Models\Account;
 use App\Services\PostHogService;
+use App\Support\Billing\StripeValue;
+use App\Support\StripeSubscriptionConversion;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -52,10 +54,73 @@ class TrackBilling implements ShouldQueue
                 'stripe_status' => data_get($this->payload, 'data.object.status'),
                 'plan_slug' => $account->plan?->slug->value,
                 'previous_plan' => $this->previousPlan,
+                ...$this->cancellationProperties(),
+                ...$this->cancelReasonProperties(),
             ],
             $account,
         );
 
+        $postHog->groupIdentify('account', (string) $account->id, [
+            'subscription_status' => $account->subscriptionStatus(),
+            'has_active_subscription' => $account->hasActiveSubscription(),
+            ...$this->currentCancellationProperties($account),
+            ...$this->firstMonthOfferProperties(),
+        ]);
+
         SyncUser::dispatch((string) $account->owner_id);
+    }
+
+    /**
+     * @return array{cancel_at_period_end: bool, cancel_at: string|null}
+     */
+    private function cancellationProperties(): array
+    {
+        return [
+            'cancel_at_period_end' => (bool) data_get($this->payload, 'data.object.cancel_at_period_end', false),
+            'cancel_at' => StripeValue::timestamp(data_get($this->payload, 'data.object.cancel_at'))?->toIso8601String(),
+        ];
+    }
+
+    /**
+     * @return array{cancel_at_period_end: bool, cancel_at: string|null}
+     */
+    private function currentCancellationProperties(Account $account): array
+    {
+        $subscription = $account->subscription(Account::SUBSCRIPTION_NAME);
+        $onGracePeriod = (bool) $subscription?->onGracePeriod();
+
+        return [
+            'cancel_at_period_end' => $onGracePeriod,
+            'cancel_at' => $onGracePeriod ? $subscription->ends_at->toIso8601String() : null,
+        ];
+    }
+
+    /**
+     * @return array{}|array{cancel_reason: string|null, cancel_feedback: string|null}
+     */
+    private function cancelReasonProperties(): array
+    {
+        if ($this->event !== BillingEvent::Cancelled) {
+            return [];
+        }
+
+        return [
+            'cancel_reason' => data_get($this->payload, 'data.object.cancellation_details.reason'),
+            'cancel_feedback' => data_get($this->payload, 'data.object.cancellation_details.feedback'),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function firstMonthOfferProperties(): array
+    {
+        if ($this->event !== BillingEvent::Created) {
+            return [];
+        }
+
+        return [
+            'first_month_offer_ends_at' => StripeSubscriptionConversion::firstMonthOfferEndsAt($this->payload),
+        ];
     }
 }

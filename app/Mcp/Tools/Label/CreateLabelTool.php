@@ -8,13 +8,20 @@ use App\Actions\Label\CreateLabel;
 use App\Http\Resources\Api\LabelResource;
 use App\Mcp\Concerns\AuthorizesMcpTool;
 use App\Models\Workspace;
+use App\Support\Requests\Label\LabelRequestRules;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
 use Laravel\Mcp\Server\Attributes\Description;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
+#[IsReadOnly(false)]
+#[IsDestructive(false)]
+#[IsOpenWorld(false)]
 #[Description('Create a new label with a name and hex color.')]
 class CreateLabelTool extends Tool
 {
@@ -22,20 +29,13 @@ class CreateLabelTool extends Tool
 
     public function handle(Request $request): Response|ResponseFactory
     {
-        $workspace = $this->authorizeCurrentWorkspace(
-            $request,
-            'createPost',
-            'Not authorized to manage labels.',
-        );
+        $workspace = $this->authorizeCurrentWorkspace($request, 'createPost');
 
         if (! $workspace instanceof Workspace) {
             return $workspace;
         }
 
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'color' => ['required', 'string', 'max:7', 'regex:/^#[0-9A-Fa-f]{6}$/'],
-        ]);
+        $validated = $request->validate(LabelRequestRules::rules());
 
         $label = CreateLabel::execute($workspace, $validated);
 
@@ -46,7 +46,7 @@ class CreateLabelTool extends Tool
     {
         return [
             'name' => $schema->string()->required()->description('The label name.'),
-            'color' => $schema->string()->required()->description('Hex color code (e.g. #FF5733).'),
+            'color' => $schema->string()->required()->description('Hex color as #RRGGBB with the leading # (e.g. #FF5733).'),
         ];
     }
 }

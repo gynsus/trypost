@@ -8,6 +8,7 @@ use App\Actions\User\CreateUser;
 use App\Enums\Auth\SocialAuthProvider;
 use App\Http\Controllers\Auth\Concerns\PreservesAttributionParameters;
 use App\Http\Controllers\Auth\Concerns\PreservesInvite;
+use App\Http\Controllers\Auth\Concerns\PreservesSignupPreferences;
 use App\Http\Controllers\Controller;
 use App\Models\Invite;
 use App\Models\User;
@@ -19,7 +20,7 @@ use Laravel\Socialite\Facades\Socialite;
 
 class GoogleController extends Controller
 {
-    use PreservesAttributionParameters, PreservesInvite;
+    use PreservesAttributionParameters, PreservesInvite, PreservesSignupPreferences;
 
     public function redirect(Request $request): RedirectResponse
     {
@@ -27,6 +28,7 @@ class GoogleController extends Controller
 
         $this->storeAttributionParameters($request);
         $this->storeInvite($request);
+        $this->storeSignupPreferences($request);
 
         return Socialite::driver('google-auth')->redirect();
     }
@@ -62,16 +64,16 @@ class GoogleController extends Controller
             ->first();
 
         if ($existing) {
-            return redirect()->route('app.authentication.edit')
-                ->with('flash.error', __('settings.authentication.providers.flash_already_linked', ['provider' => 'Google']));
+            return redirect()->route('app.profile.edit', ['tab' => 'login'])
+                ->with('flash.error', __('settings.profile.providers.flash_already_linked', ['provider' => 'Google']));
         }
 
         if ($user->google_id !== $googleId) {
             $user->update(['google_id' => $googleId]);
         }
 
-        return redirect()->route('app.authentication.edit')
-            ->with('flash.success', __('settings.authentication.providers.flash_connected', ['provider' => 'Google']));
+        return redirect()->route('app.profile.edit', ['tab' => 'login'])
+            ->with('flash.success', __('settings.profile.providers.flash_connected', ['provider' => 'Google']));
     }
 
     private function loginExistingUser(User $user, string $googleId): RedirectResponse
@@ -87,6 +89,7 @@ class GoogleController extends Controller
         Auth::login($user, remember: true);
 
         $this->retrieveAttributionParameters();
+        $this->retrieveSignupPreferences();
 
         if ($invite = Invite::fromId($this->retrieveInvite())) {
             return redirect()->route('app.invites.show', $invite);
@@ -104,6 +107,7 @@ class GoogleController extends Controller
         }
 
         $attributionParameters = $this->retrieveAttributionParameters();
+        $preferences = $this->retrieveSignupPreferences();
 
         $user = CreateUser::execute([
             'name' => $googleUser->getName(),
@@ -112,6 +116,9 @@ class GoogleController extends Controller
             'email_verified_at' => now(),
             'is_invite' => $invite !== null,
             'registration_ip' => request()->ip(),
+            'timezone' => data_get($preferences, 'timezone'),
+            'week_starts_on' => data_get($preferences, 'week_starts_on'),
+            'time_format' => data_get($preferences, 'time_format'),
         ], $attributionParameters);
 
         event(new Registered($user));

@@ -3,6 +3,11 @@
 declare(strict_types=1);
 
 use App\Socialite\InstagramProvider;
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Response as GuzzleResponse;
 use Illuminate\Http\Request;
 
 test('instagram provider has correct scopes', function () {
@@ -25,7 +30,7 @@ test('instagram provider has correct token url', function () {
     $method = $reflection->getMethod('getTokenUrl');
     $method->setAccessible(true);
 
-    expect($method->invoke($provider))->toBe('https://api.instagram.com/oauth/access_token');
+    expect($method->invoke($provider))->toBe(config('trypost.platforms.instagram.oauth_api').'/oauth/access_token');
 });
 
 test('instagram provider generates correct token fields', function () {
@@ -80,4 +85,42 @@ test('instagram provider maps user without name uses username', function () {
     ]);
 
     expect($user->getName())->toBe('testuser');
+});
+
+test('instagram provider reports the permissions the login granted as its scopes', function (array $tokenResponse) {
+    $provider = new InstagramProvider(Request::create('/'), 'client-id', 'client-secret', 'https://example.com/callback');
+    $provider->setHttpClient(new Client(['handler' => HandlerStack::create(new MockHandler([
+        new GuzzleResponse(200, ['Content-Type' => 'application/json'], json_encode($tokenResponse)),
+        new GuzzleResponse(200, ['Content-Type' => 'application/json'], json_encode(['access_token' => 'long-token', 'expires_in' => 5183944])),
+    ]))]));
+
+    $response = $provider->getAccessTokenResponse('code-1');
+
+    expect($response)
+        ->access_token->toBe('long-token')
+        ->scope->toBe('instagram_business_basic,instagram_business_content_publish');
+})->with([
+    'documented shape' => [['data' => [['access_token' => 'short-token', 'user_id' => '1', 'permissions' => 'instagram_business_basic,instagram_business_content_publish']]]],
+    'flat shape' => [['access_token' => 'short-token', 'user_id' => '1', 'permissions' => ['instagram_business_basic', 'instagram_business_content_publish']]],
+]);
+
+test('instagram provider asks for the professional account id with the profile', function () {
+    $history = [];
+    $stack = HandlerStack::create(new MockHandler([
+        new GuzzleResponse(200, ['Content-Type' => 'application/json'], json_encode(['id' => 'app-scoped-1', 'user_id' => '17841400000000001', 'username' => 'brand'])),
+    ]));
+    $stack->push(Middleware::history($history));
+
+    $provider = new InstagramProvider(Request::create('/'), 'client-id', 'client-secret', 'https://example.com/callback');
+    $provider->setHttpClient(new Client(['handler' => $stack]));
+
+    $user = $provider->userFromToken('token-1');
+
+    parse_str($history[0]['request']->getUri()->getQuery(), $query);
+
+    expect((string) $history[0]['request']->getUri()->withQuery(''))->toBe(config('trypost.platforms.instagram.graph_api').'/me')
+        ->and(explode(',', $query['fields']))->toContain('id', 'user_id', 'username')
+        ->and($query['access_token'])->toBe('token-1')
+        ->and($user->getId())->toBe('app-scoped-1')
+        ->and($user->user['user_id'])->toBe('17841400000000001');
 });

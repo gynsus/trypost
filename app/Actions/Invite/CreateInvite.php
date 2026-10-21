@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Actions\Invite;
 
-use App\Enums\UserWorkspace\Role as WorkspaceRole;
+use App\Enums\PostHog\WorkspaceEvent;
+use App\Jobs\PostHog\CaptureAccountEvent;
 use App\Mail\WorkspaceInvite as WorkspaceInviteMail;
 use App\Models\Invite;
 use App\Models\Workspace;
+use App\Services\PostHogService;
 use Illuminate\Support\Facades\Mail;
 
 class CreateInvite
@@ -20,13 +22,27 @@ class CreateInvite
             'account_id' => $workspace->account_id,
             'invited_by' => $inviter->id,
             'email' => data_get($data, 'email'),
-            'role' => WorkspaceRole::from(data_get($data, 'role')),
+            'is_admin' => (bool) data_get($data, 'is_admin'),
+            'requires_approval' => (bool) data_get($data, 'requires_approval'),
             'workspaces' => [$workspace->id],
         ]);
 
         Mail::to($invite->email)
             ->locale($inviter->preferredLocale())
             ->send(new WorkspaceInviteMail($invite));
+
+        rescue(function () use ($workspace, $invite, $inviter): void {
+            CaptureAccountEvent::dispatchIf(
+                PostHogService::isEnabled(),
+                (string) $inviter->id,
+                (string) $workspace->account_id,
+                WorkspaceEvent::MemberInvited,
+                [
+                    'is_admin' => $invite->is_admin,
+                    'requires_approval' => $invite->requires_approval,
+                ],
+            );
+        });
 
         return $invite;
     }
