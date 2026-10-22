@@ -16,6 +16,7 @@ import {
     IconMoon,
     IconPlus,
     IconSettings,
+    IconSparkles,
     IconSun,
     IconUsers,
 } from '@tabler/icons-vue';
@@ -35,9 +36,9 @@ import {
     DropdownMenuSubContent,
     DropdownMenuSubTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useChangelogDialog } from '@/composables/useChangelogDialog';
 import { clearAllComposerAutosaves } from '@/composables/useComposerAutosave';
 import { useWorkspaceAbilities } from '@/composables/useWorkspaceAbilities';
-import { useWorkspaceLimit } from '@/composables/useWorkspaceLimit';
 import { openSupportChat } from '@/lib/supportChat';
 import { cn } from '@/lib/utils';
 import posthog from '@/posthog';
@@ -65,13 +66,12 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-    upgradeRequired: [];
+    createWorkspace: [];
 }>();
 
 const page = usePage();
 const { canManageBilling, canManageTeam, canManageWorkspace } =
     useWorkspaceAbilities();
-const { createOrUpgrade } = useWorkspaceLimit(() => props.workspaces.length);
 const selfHosted = computed(() => Boolean(page.props.selfHosted));
 const showBilling = computed(
     () => canManageBilling.value && !selfHosted.value,
@@ -135,7 +135,7 @@ const switchWorkspace = (workspaceId: string): void => {
 };
 
 const handleCreateWorkspace = (): void => {
-    createOrUpgrade(() => emit('upgradeRequired'));
+    emit('createWorkspace');
 };
 
 const handleLogout = (): void => {
@@ -145,6 +145,8 @@ const handleLogout = (): void => {
 };
 
 const showChatSupport = computed(() => page.props.selfHosted === false);
+const showChangelog = computed(() => Boolean(page.props.changelog));
+const { openList: openChangelog } = useChangelogDialog();
 
 const statusTheme = computed(() =>
     currentTheme.value === 'dark' ||
@@ -448,6 +450,14 @@ const supportLinks = [
                     >
                         <IconMessageChatbot />
                         {{ $t('sidebar.support.chat') }}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                        v-if="showChangelog"
+                        data-testid="sidebar-support-changelog"
+                        @click="openChangelog"
+                    >
+                        <IconSparkles />
+                        {{ $t('sidebar.support.changelog') }}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel
