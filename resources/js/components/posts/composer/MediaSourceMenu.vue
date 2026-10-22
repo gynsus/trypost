@@ -1,13 +1,10 @@
 <script setup lang="ts">
 import { usePage } from '@inertiajs/vue3';
-import {
-    IconBrandGoogleDrive,
-    IconBrandGooglePhotos,
-    IconBrandUnsplash,
-    IconCircleLetterCFilled,
-    IconPhotoPlus,
-    IconUpload,
-} from '@tabler/icons-vue';
+import { IconPhotoPlus, IconUpload } from '@tabler/icons-vue';
+import Canva from '@thesvg/vue/canva';
+import GoogleDrive from '@thesvg/vue/google-drive-2026';
+import GooglePhotos from '@thesvg/vue/google-photos';
+import Unsplash from '@thesvg/vue/unsplash';
 import { getActiveLanguage, trans } from 'laravel-vue-i18n';
 import { computed, onBeforeUnmount, ref, type Component } from 'vue';
 import { toast } from 'vue-sonner';
@@ -32,6 +29,7 @@ import {
     type MediaImportPayload,
     useMediaImport,
 } from '@/composables/useMediaImport';
+import { inTextColor } from '@/lib/brandLogos';
 import { defaultCanvaPreset, openCanva } from '@/lib/mediaSources/canva';
 import {
     type GoogleDrivePick,
@@ -62,10 +60,10 @@ const emit = defineEmits<{
 }>();
 
 const ICONS: Record<SourceKey, Component> = {
-    canva: IconCircleLetterCFilled,
-    google_drive: IconBrandGoogleDrive,
-    google_photos: IconBrandGooglePhotos,
-    unsplash: IconBrandUnsplash,
+    canva: Canva,
+    google_drive: GoogleDrive,
+    google_photos: GooglePhotos,
+    unsplash: inTextColor(Unsplash),
 };
 
 const page = usePage();
@@ -273,29 +271,30 @@ const pickCanvaPreset = (
                                 :data-testid="`canva-preset-${preset.value}`"
                                 @select="pickCanvaPreset(option, preset.value)"
                             >
-                                <span class="flex flex-col">
-                                    <span class="flex items-center gap-1.5">
-                                        {{
-                                            $t(
-                                                `posts.composer.media_sources.canva_presets.${preset.value}`,
-                                            )
-                                        }}
-                                        <span
-                                            v-if="preset.is_default"
-                                            class="text-xs text-muted-foreground"
-                                            :data-testid="`canva-preset-${preset.value}-default`"
-                                        >
-                                            ({{
-                                                $t(
-                                                    'posts.composer.media_sources.canva_default',
-                                                )
-                                            }})
-                                        </span>
-                                    </span>
+                                <span
+                                    class="flex items-baseline gap-1.5 whitespace-nowrap"
+                                >
+                                    {{
+                                        $t(
+                                            `posts.composer.media_sources.canva_presets.${preset.value}`,
+                                        )
+                                    }}
                                     <span
                                         class="text-xs text-muted-foreground tabular-nums"
                                     >
-                                        {{ preset.width }} × {{ preset.height }}
+                                        ({{ preset.width }}×{{ preset.height }})
+                                        <template v-if="preset.is_default">
+                                            ·
+                                            <span
+                                                :data-testid="`canva-preset-${preset.value}-default`"
+                                            >
+                                                {{
+                                                    $t(
+                                                        'posts.composer.media_sources.canva_default',
+                                                    )
+                                                }}
+                                            </span>
+                                        </template>
                                     </span>
                                 </span>
                             </DropdownMenuItem>

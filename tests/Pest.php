@@ -16,6 +16,7 @@ use App\Services\Http\HostResolver;
 use App\Support\Social\PendingConnection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpClientRequest;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -40,6 +41,7 @@ pest()->extend(TestCase::class)
     ->beforeEach(function (): void {
         Http::preventStrayRequests();
         fakePwnedPasswords();
+        fakeChatGptEgressRanges();
         Queue::fake([BootstrapAccountAnalytics::class]);
     })
     ->in('Feature', 'Unit');
@@ -127,6 +129,26 @@ function fakePwnedPasswords(): void
         'api.pwnedpasswords.com/range/*' => fn (HttpClientRequest $request) => Http::response(
             str_ends_with($request->url(), substr($hash, 0, 5)) ? substr($hash, 5).':42' : '',
         ),
+    ]);
+}
+
+/**
+ * OpenAI's published ChatGPT egress ranges, answered from the
+ * testing.chatgpt_egress_ranges config so a test can change them after the
+ * global fake is registered. null answers a failed read.
+ *
+ * @param  list<mixed>|null  $ranges
+ */
+function fakeChatGptEgressRanges(?array $ranges = []): void
+{
+    config(['testing.chatgpt_egress_ranges' => $ranges]);
+
+    Http::fake([
+        config('trypost.mcp_chatgpt_ip_ranges_url') => fn () => config('testing.chatgpt_egress_ranges') === null
+            ? Http::response('', 500)
+            : Http::response([
+                'prefixes' => collect(config('testing.chatgpt_egress_ranges'))->map(fn (mixed $range): array => ['ipv4Prefix' => $range])->all(),
+            ]),
     ]);
 }
 
@@ -329,6 +351,34 @@ function subscribeAccount(Account $account): void
 }
 
 /**
+ * Turns PostHog on for the test, as on an install with an API key.
+ */
+function enablePostHog(): void
+{
+    config(['services.posthog.enabled' => true, 'services.posthog.api_key' => 'phc_test_key']);
+}
+
+/**
+ * Make dispatching the given job throw, as when the queue is down, while every
+ * other job dispatches as usual. `$when` narrows the failure to the jobs it
+ * accepts.
+ *
+ * @param  class-string  $jobClass
+ * @param  (Closure(object): bool)|null  $when
+ */
+function failDispatchOf(string $jobClass, ?Closure $when = null): void
+{
+    $dispatcher = Bus::getFacadeRoot();
+    $bus = Mockery::mock($dispatcher);
+    $bus->shouldReceive('dispatch')
+        ->with(Mockery::on(fn (mixed $job): bool => $job instanceof $jobClass && ($when === null || $when($job))))
+        ->andThrow(new RuntimeException('Queue is down.'));
+    $bus->shouldReceive('dispatch')->andReturnUsing(fn (mixed $job, mixed $handler = null): mixed => $dispatcher->dispatch($job, $handler));
+
+    Bus::swap($bus);
+}
+
+/**
  * Insert an OAuth client suitable for MCP connection tests.
  */
 function mcpOauthClient(string $name = 'My Agent'): string
@@ -406,7 +456,7 @@ function mcpAccessToken(
  * @param  list<string>  $scopes
  * @return array{token: AccessToken, plain_token: string}
  */
-function mcpBearerToken(User $user, Workspace $workspace, array $scopes = ['mcp:use']): array
+function mcpBearerToken(User $user, Workspace $workspace, array $scopes = ['mcp:use'], string $clientName = 'My Agent'): array
 {
     $result = $user->createToken('MCP', $scopes);
     $token = AccessToken::query()->findOrFail($result->token->id);
@@ -414,7 +464,7 @@ function mcpBearerToken(User $user, Workspace $workspace, array $scopes = ['mcp:
     // Reassign to a dedicated MCP client so we never mutate Passport's shared
     // personal-access client (which would poison PAT fixtures in the same run).
     $token->forceFill([
-        'client_id' => mcpOauthClient(),
+        'client_id' => mcpOauthClient($clientName),
         'workspace_id' => $workspace->id,
     ])->saveQuietly();
 
@@ -540,4 +590,94 @@ function waitForWebFonts(mixed $page): void
             await document.fonts.ready;
         })();
     JS);
+}
+
+/**
+ * Wait until a JavaScript expression is true in the page, for up to 15
+ * seconds. Assertions do not wait for the SPA to paint, and a blocking
+ * sleep() would starve the server that serves the page, so the page polls.
+ */
+function waitForCondition(mixed $page, string $condition): void
+{
+    $page->script(<<<JS
+        (async () => {
+            for (let i = 0; i < 300; i++) {
+                if ({$condition}) return;
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+        })();
+    JS);
+}
+
+/**
+ * The selector as a JavaScript string, with `@name` standing for
+ * `[data-testid="name"]` as in `$page->click('@name')`, anywhere in it:
+ * `@channel-settings-rows [role="combobox"]`.
+ */
+function jsSelector(string $selector): string
+{
+    return json_encode(preg_replace('/@([\w-]+)/', '[data-testid="$1"]', $selector));
+}
+
+/**
+ * Wait until an element matching the selector exists and the expression,
+ * written about `element`, is true: "element.getAttribute('aria-checked') === 'true'".
+ */
+function waitForState(mixed $page, string $selector, string $expression): void
+{
+    $selector = jsSelector($selector);
+
+    waitForCondition($page, "((element) => element && ({$expression}))(document.querySelector({$selector}))");
+}
+
+/**
+ * Wait until an element matching the selector is mounted and laid out.
+ */
+function waitFor(mixed $page, string $selector): void
+{
+    waitForState($page, $selector, 'element.getBoundingClientRect().height > 0');
+}
+
+/**
+ * Wait until no element matches the selector.
+ */
+function waitForGone(mixed $page, string $selector): void
+{
+    $selector = jsSelector($selector);
+
+    waitForCondition($page, "!document.querySelector({$selector})");
+}
+
+/**
+ * Wait until any element matching the selector contains the text.
+ */
+function waitForText(mixed $page, string $selector, string $text): void
+{
+    $selector = jsSelector($selector);
+    $text = json_encode($text);
+
+    waitForCondition($page, "[...document.querySelectorAll({$selector})].some((element) => element.textContent.includes({$text}))");
+}
+
+/**
+ * Wait until one element is gone or another is shown, whichever happens
+ * first, so the assertion after it fails at once on the other outcome
+ * instead of waiting out the timeout.
+ */
+function waitForGoneOrShown(mixed $page, string $gone, string $shown): void
+{
+    $gone = jsSelector($gone);
+    $shown = jsSelector($shown);
+
+    waitForCondition($page, "!document.querySelector({$gone}) || document.querySelector({$shown})");
+}
+
+/**
+ * Wait until the page is at this path.
+ */
+function waitForPath(mixed $page, string $path): void
+{
+    $path = json_encode($path);
+
+    waitForCondition($page, "location.pathname === {$path}");
 }

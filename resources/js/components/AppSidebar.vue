@@ -15,6 +15,7 @@ import { computed, ref } from 'vue';
 
 import { index as postsIndex } from '@/actions/App/Http/Controllers/App/PostController';
 import AppLogo from '@/components/AppLogo.vue';
+import ChangelogCard from '@/components/changelog/ChangelogCard.vue';
 import InviteMemberDialog from '@/components/members/InviteMemberDialog.vue';
 import NavChannels from '@/components/NavChannels.vue';
 import NavMain from '@/components/NavMain.vue';
@@ -100,7 +101,6 @@ const mainNavItems = computed<NavItem[]>(() => [
                   title: trans('sidebar.repurposes'),
                   href: repurposes.url(),
                   icon: IconRepeat,
-                  badge: trans('common.beta'),
               },
           ]
         : []),
@@ -236,6 +236,7 @@ const mainNavItems = computed<NavItem[]>(() => [
             <NavChannels v-if="currentWorkspace" />
         </SidebarContent>
         <SidebarFooter class="gap-0 p-0">
+            <ChangelogCard />
             <SidebarUserMenu />
         </SidebarFooter>
 
