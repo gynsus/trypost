@@ -44,6 +44,25 @@ abstract class AbstractLinkedInPublisher
 
     private const int ARTICLE_THUMB_TIMEOUT_SECONDS = 10;
 
+    /**
+     * Characters `little` reserves for mentions, hashtags and templates. Any of
+     * them left unescaped ends the plain text there, so LinkedIn publishes the
+     * commentary cut at that character without an error.
+     *
+     * @see https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/little-text-format
+     */
+    private const string LITTLE_RESERVED = '[\\\\|{}@\[\]()<>#*_~]';
+
+    private const string LITTLE_RESERVED_PATTERN = '/'.self::LITTLE_RESERVED.'/';
+
+    /**
+     * What {@see self::toLittleText()} escapes: a whole URL, so its `#`
+     * fragment stays text, or one reserved character. A `#` that opens a
+     * hashtag (`#php`, not after a letter, digit, `/`, `=` or `&`, and with a letter in
+     * the tag so `#1` stays text) is skipped and still becomes a hashtag.
+     */
+    private const string LITTLE_TEXT_PATTERN = '/(?:https?:\/\/|www\.)\S+|(?<![\p{L}\p{N}_\/=&])#(?=\p{N}*\p{L})(*SKIP)(*FAIL)|'.self::LITTLE_RESERVED.'/iu';
+
     private string $apiVersion = '202601';
 
     private string $accessToken;
@@ -318,7 +337,7 @@ abstract class AbstractLinkedInPublisher
     {
         return [
             'author' => $this->authorUrn(),
-            'commentary' => $content ?? '',
+            'commentary' => $this->toLittleText($content ?? ''),
             'visibility' => 'PUBLIC',
             'distribution' => [
                 'feedDistribution' => 'MAIN_FEED',
@@ -327,6 +346,29 @@ abstract class AbstractLinkedInPublisher
             ],
             'lifecycleState' => 'PUBLISHED',
         ];
+    }
+
+    /**
+     * The commentary as plain `little` text: every reserved character escaped
+     * with a backslash, hashtags excepted. TryPost sends no mentions or
+     * templates, so an `@` or `{` the person typed is always text.
+     */
+    private function toLittleText(string $content): string
+    {
+        return preg_replace_callback(
+            self::LITTLE_TEXT_PATTERN,
+            fn (array $matches): string => $this->escapeLittleReserved($matches[0]),
+            $content,
+        ) ?? $this->escapeLittleReserved($content);
+    }
+
+    /**
+     * Every reserved character escaped, hashtags included. Byte-wise, so it
+     * also covers text the Unicode pattern cannot read.
+     */
+    private function escapeLittleReserved(string $text): string
+    {
+        return preg_replace(self::LITTLE_RESERVED_PATTERN, '\\\\$0', $text) ?? $text;
     }
 
     /**
