@@ -13,6 +13,7 @@ import PinterestPreview from '@/components/posts/previews/PinterestPreview.vue';
 import TelegramPreview from '@/components/posts/previews/TelegramPreview.vue';
 import ThreadsPreview from '@/components/posts/previews/ThreadsPreview.vue';
 import TikTokPreview from '@/components/posts/previews/TikTokPreview.vue';
+import VkPreview from '@/components/posts/previews/VkPreview.vue';
 import type { PreviewAccount } from '@/components/posts/previews/types';
 import XPreview from '@/components/posts/previews/XPreview.vue';
 import YouTubePreview from '@/components/posts/previews/YouTubePreview.vue';
@@ -161,6 +162,8 @@ const previewComponent = computed(() => {
             return DiscordPreview;
         case 'google_business':
             return GoogleBusinessPreview;
+        case 'vk':
+            return VkPreview;
         default:
             return LinkedInPreview;
     }

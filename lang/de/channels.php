@@ -59,6 +59,7 @@ return [
         'telegram' => 'Kanal oder Gruppe',
         'discord' => 'Server',
         'google_business' => 'Unternehmensprofil',
+        'vk' => 'Profil oder Community',
     ],
 
     'details' => [

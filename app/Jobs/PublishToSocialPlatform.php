@@ -31,6 +31,7 @@ use App\Services\Social\Telegram\TelegramPublisher;
 use App\Services\Social\ThreadsPublisher;
 use App\Services\Social\TikTokPublisher;
 use App\Services\Social\FirstCommentPoster;
+use App\Services\Social\VkPublisher;
 use App\Services\Social\XPublisher;
 use App\Services\Social\YouTubePublisher;
 use App\Support\Social\GoogleBusinessDerivativeCleaner;
@@ -575,7 +576,7 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
             : 'An unexpected error occurred while publishing. Please try again.';
     }
 
-    private function getPublisher(): LinkedInPublisher|LinkedInPagePublisher|XPublisher|TikTokPublisher|YouTubePublisher|FacebookPublisher|InstagramPublisher|ThreadsPublisher|PinterestPublisher|BlueskyPublisher|MastodonPublisher|TelegramPublisher|DiscordPublisher|GoogleBusinessPublisher
+    private function getPublisher(): LinkedInPublisher|LinkedInPagePublisher|XPublisher|TikTokPublisher|YouTubePublisher|FacebookPublisher|InstagramPublisher|ThreadsPublisher|PinterestPublisher|BlueskyPublisher|MastodonPublisher|TelegramPublisher|DiscordPublisher|GoogleBusinessPublisher|VkPublisher
     {
         return match ($this->post->platform) {
             SocialPlatform::LinkedIn => app(LinkedInPublisher::class),
@@ -592,6 +593,7 @@ class PublishToSocialPlatform implements ShouldBeUnique, ShouldQueue
             SocialPlatform::Telegram => app(TelegramPublisher::class),
             SocialPlatform::Discord => app(DiscordPublisher::class),
             SocialPlatform::GoogleBusiness => app(GoogleBusinessPublisher::class),
+            SocialPlatform::Vk => app(VkPublisher::class),
         };
     }
 

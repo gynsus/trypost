@@ -73,6 +73,8 @@ enum ContentType: string
 
     // Google Business Profile
     case GoogleBusinessPost = 'google_business_post';
+    // VK
+    case VkPost = 'vk_post';
 
     /**
      * AI generation format for an Instagram carousel. Not a content type —
@@ -145,6 +147,7 @@ enum ContentType: string
             self::TelegramPost => 'Post',
             self::DiscordMessage => 'Message',
             self::GoogleBusinessPost => 'Post',
+            self::VkPost => 'Post',
         };
     }
 
@@ -174,6 +177,7 @@ enum ContentType: string
             self::TelegramPost => SocialPlatform::Telegram,
             self::DiscordMessage => SocialPlatform::Discord,
             self::GoogleBusinessPost => SocialPlatform::GoogleBusiness,
+            self::VkPost => SocialPlatform::Vk,
         };
     }
 
@@ -269,6 +273,7 @@ enum ContentType: string
             self::TelegramPost => 10,
             self::DiscordMessage => 10,
             self::GoogleBusinessPost => 1,
+            self::VkPost => 10,
         };
     }
 
@@ -528,7 +533,7 @@ enum ContentType: string
             self::ThreadsPost, self::ThreadsGhostPost, self::ThreadsPoll => ['1:1', '4:5', '1.91:1'],
             self::BlueskyPost, self::MastodonPost, self::MastodonPoll => ['1:1', '16:9'],
             self::GoogleBusinessPost => ['4:3', '1:1'],
-            self::TelegramPost, self::DiscordMessage, self::LinkedInComment => self::defaultCropPresets(),
+            self::TelegramPost, self::DiscordMessage, self::LinkedInComment, self::VkPost => self::defaultCropPresets(),
         };
     }
 
@@ -816,6 +821,7 @@ enum ContentType: string
             self::TelegramPost => true,
             self::DiscordMessage => true,
             self::GoogleBusinessPost => false,
+            self::VkPost => true,
         };
     }
 
@@ -890,6 +896,7 @@ enum ContentType: string
             self::FacebookPost => false,
             self::DiscordMessage => false,
             self::GoogleBusinessPost => false,
+            self::VkPost => false,
             default => true,
         };
     }
@@ -962,6 +969,7 @@ enum ContentType: string
             SocialPlatform::Telegram => self::TelegramPost,
             SocialPlatform::Discord => self::DiscordMessage,
             SocialPlatform::GoogleBusiness => self::GoogleBusinessPost,
+            SocialPlatform::Vk => self::VkPost,
         };
     }
 

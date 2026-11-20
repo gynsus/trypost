@@ -19,6 +19,7 @@ const PLATFORM_LOGOS: Record<string, string> = {
     [Platform.Telegram]: '/images/accounts/telegram.png',
     [Platform.Discord]: '/images/accounts/discord.png',
     [Platform.GoogleBusiness]: '/images/accounts/google_business.png',
+    [Platform.Vk]: '/images/accounts/vk.png',
 };
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -37,6 +38,7 @@ const PLATFORM_LABELS: Record<string, string> = {
     [Platform.Telegram]: 'Telegram',
     [Platform.Discord]: 'Discord',
     [Platform.GoogleBusiness]: 'Google Business Profile',
+    [Platform.Vk]: 'VK',
 };
 
 const PLATFORM_CONTENT_TYPES: Readonly<Record<string, ContentTypeValue[]>> = {
@@ -59,6 +61,7 @@ const PLATFORM_CONTENT_TYPES: Readonly<Record<string, ContentTypeValue[]>> = {
     [Platform.Telegram]: [ContentType.TelegramPost],
     [Platform.Discord]: [ContentType.DiscordMessage],
     [Platform.GoogleBusiness]: [ContentType.GoogleBusinessPost],
+    [Platform.Vk]: [ContentType.VkPost],
 };
 
 const PLATFORM_CONTENT_TYPE_BADGES: Readonly<Record<string, ContentTypeValue[]>> = {
