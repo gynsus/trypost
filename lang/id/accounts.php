@@ -17,6 +17,27 @@ return [
         'connection_error' => 'Gagal terhubung ke Bluesky. Coba lagi.',
     ],
 
+    'vk' => [
+        'title' => 'Hubungkan VK',
+        'description' => 'Publikasikan ke komunitas atau dinding profil kamu',
+        'access_token' => 'Token akses',
+        'access_token_placeholder' => 'vk1.a.…',
+        'access_token_hint' => 'Disarankan: <strong>token akses komunitas</strong> (komunitas → Kelola → Penggunaan API → Token akses; beri izin foto, dinding, dan pengelolaan komunitas) — publikasi berfungsi dengan jenis aplikasi apa pun. VK tidak mengizinkan unggah video atau analitik postingan dengan token komunitas. <strong>Token akses pengguna</strong> dengan cakupan <em>wall, photos, groups, video, offline</em> juga bisa, tapi VK hanya mengizinkan aplikasi standalone memposting ke dinding.',
+        'pick_target' => 'Pilih tempat publikasi',
+        'target_group' => 'Komunitas',
+        'target_profile' => 'Profil pribadi',
+        'invalid_token' => 'VK menolak token ini.',
+        'invalid_target' => 'Dinding ini tidak bisa dikelola dengan token yang diberikan.',
+        'community' => 'Komunitas',
+        'community_placeholder' => 'vk.com/yourclub',
+        'community_hint' => 'VK tidak bisa tahu kunci ini milik komunitas mana, jadi masukkan alamat atau nama layarnya — kunci lalu dicocokkan dengannya.',
+        'invalid_community' => 'Komunitas tidak ditemukan. Masukkan alamatnya seperti vk.com/yourclub.',
+        'community_token_mismatch' => 'Kunci ini milik komunitas lain.',
+        'connection_error' => 'Gagal terhubung ke VK. Coba lagi.',
+        'submit' => 'Hubungkan VK',
+        'submitting' => 'Menghubungkan...',
+    ],
+
     'mastodon' => [
         'title' => 'Hubungkan Mastodon',
         'description' => 'Masukkan instance Mastodon-mu',

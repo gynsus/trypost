@@ -59,6 +59,7 @@ return [
         'telegram' => 'Channel atau grup',
         'discord' => 'Server',
         'google_business' => 'Profil bisnis',
+        'vk' => 'Profil atau komunitas',
     ],
 
     'details' => [

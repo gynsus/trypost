@@ -140,4 +140,11 @@ return [
         'expired_action' => 'Ke halaman utama',
     ],
 
+    'pending_approval' => [
+        'page_title' => 'Menunggu persetujuan',
+        'title' => 'Akun kamu sedang menunggu persetujuan',
+        'description' => 'Administrator perlu menyetujui akun baru sebelum bisa digunakan. Kamu akan menerima email begitu akun kamu disetujui.',
+        'log_out' => 'Keluar',
+    ],
+
 ];

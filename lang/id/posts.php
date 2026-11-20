@@ -477,6 +477,19 @@ return [
             'document_title' => 'Judul dokumen',
             'document_title_placeholder' => 'Tampil di postingan dokumen PDF kamu',
         ],
+        'location' => [
+            'label' => 'Lokasi',
+            'id_placeholder' => 'ID tempat',
+            'name_placeholder' => 'Nama (untuk tampilan)',
+            'hint' => 'ID tempat Facebook; pencarian tempat tertutup untuk aplikasi pihak ketiga, jadi masukkan ID sekali lalu gunakan lagi.',
+        ],
+        'first_comment' => [
+            'label' => 'Komentar pertama',
+            'placeholder' => 'Tautan dan tambahan untuk komentar pertama…',
+            'hint' => 'Diposting oleh channel kamu tepat setelah video dipublikasikan.',
+            'hint_instagram' => 'Diposting tepat setelah publikasi — tempat klasik untuk tautan yang tidak bisa diklik di caption Instagram. Perlu menghubungkan ulang akun sekali untuk memberi izin komentar.',
+            'max' => 'Komentar pertama tidak boleh melebihi 2200 karakter.',
+        ],
         'youtube' => [
             'description' => 'Deskripsi',
             'description_placeholder' => 'Deskripsi video',
@@ -488,6 +501,14 @@ return [
             'title' => 'Judul',
             'title_placeholder' => 'Masukkan judul untuk video kamu',
             'category' => 'Kategori',
+            'tags' => 'Tag',
+            'tags_placeholder' => 'brisbane, pixel art, city map',
+            'tags_hint' => 'Pisahkan dengan koma; membantu pencarian dan rekomendasi.',
+            'language' => 'Bahasa',
+            'location' => 'Lokasi rekaman',
+            'location_placeholder' => 'Brisbane QLD',
+            'lat' => 'Lintang',
+            'lng' => 'Bujur',
             'visibility' => 'Visibilitas',
             'privacy' => ['public' => 'Publik', 'unlisted' => 'Tidak publik', 'private' => 'Pribadi'],
             'license' => 'Lisensi',
@@ -909,6 +930,10 @@ return [
         'discord_message' => [
             'label' => 'Pesan',
             'description' => 'Pesan ke channel Discord dengan media & embed opsional',
+        ],
+        'vk_post' => [
+            'label' => 'Postingan',
+            'description' => 'Postingan teks dengan media opsional',
         ],
         'google_business_post' => [
             'label' => 'Postingan',
