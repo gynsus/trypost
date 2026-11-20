@@ -10,7 +10,7 @@ use App\Rules\ContentFitsPlatformLimits;
 use App\Support\PostPlatformMetaRules;
 use Illuminate\Support\Facades\Validator;
 
-test('custom meta messages cover pinterest, instagram collaborators, google business and x polls', function () {
+test('custom meta messages cover pinterest, instagram collaborators, google business, x polls and first-comment fields', function () {
     expect(PostPlatformMetaRules::messages())->toBe([
         'meta.link.url' => __('posts.form.pinterest.link_invalid'),
         'meta.link.max' => __('posts.form.pinterest.link_max'),
@@ -27,6 +27,7 @@ test('custom meta messages cover pinterest, instagram collaborators, google busi
         'meta.thread_replies.*.poll.options.array' => __('posts.form.poll.options_list'),
         'meta.thread_replies.*.poll.options.*.string' => __('posts.form.poll.choice_text'),
         'meta.thread_replies.*.poll.duration_minutes.integer' => __('posts.form.poll.duration_whole'),
+        'meta.first_comment.max' => __('posts.form.first_comment.max'),
     ]);
 });
 
@@ -37,6 +38,7 @@ test('custom meta attributes use translated field names', function () {
         'meta.link' => __('posts.form.pinterest.link'),
         'meta.event.title' => __('posts.form.google_business.event_title'),
         'meta.call_to_action.url' => __('posts.form.google_business.cta_url'),
+        'meta.first_comment' => __('posts.form.first_comment.label'),
     ]);
 });
 
@@ -63,6 +65,7 @@ test('shared meta rules still include non-pinterest platform fields', function (
             'meta.channel_id',
             'meta.title',
             'meta.link',
+            'meta.first_comment',
         ]);
 });
 

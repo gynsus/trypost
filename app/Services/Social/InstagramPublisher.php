@@ -47,6 +47,13 @@ class InstagramPublisher
 
     private const string WORKFLOW_FINAL_CONTAINER = 'final_container';
 
+    /**
+     * Facebook place ID from the post's `meta.location_id` — tags the post
+     * with a location. Applied to feed/reel/carousel containers; the API
+     * does not accept it on stories or carousel children.
+     */
+    private ?string $locationId = null;
+
     public function publish(Post $post): array
     {
         $this->post = $post;
@@ -54,6 +61,7 @@ class InstagramPublisher
 
         $account = $post->socialAccount;
         $this->baseUrl = $account->platform->graphApiUrl();
+        $this->locationId = trim((string) data_get($post->meta, 'location_id')) ?: null;
 
         if ($account->needsProactiveTokenRefresh()) {
             app(ConnectionVerifier::class)->refreshToken($account);
@@ -108,6 +116,19 @@ class InstagramPublisher
         return $this->publishSingleImage($instagramId, $accessToken, $content, $firstMedia);
     }
 
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    private function withLocation(array $params): array
+    {
+        if ($this->locationId !== null) {
+            $params['location_id'] = $this->locationId;
+        }
+
+        return $params;
+    }
+
     private function publishSingleImage(string $instagramId, string $accessToken, ?string $content, $media): array
     {
         $params = [
@@ -124,14 +145,14 @@ class InstagramPublisher
 
         $params = [...$params, ...$this->jsonListParam('user_tags', $media->userTags()), ...$this->sharedOptions(), ...$this->collaboratorsParam()];
 
-        $containerId = $this->createContainer($instagramId, $params, 'container');
+        $containerId = $this->createContainer($instagramId, $this->withLocation($params), 'container');
 
         return $this->finishContainer($instagramId, $accessToken, $containerId);
     }
 
     private function publishReel(string $instagramId, string $accessToken, ?string $content, $media): array
     {
-        $containerId = $this->createContainer($instagramId, [
+        $containerId = $this->createContainer($instagramId, $this->withLocation([
             'video_url' => $media->url,
             'caption' => $content,
             'media_type' => 'REELS',
@@ -140,7 +161,7 @@ class InstagramPublisher
             ...$this->sharedOptions(),
             ...$this->collaboratorsParam(),
             ...$this->reelOptions(),
-        ], 'reel container');
+        ]), 'reel container');
 
         return $this->finishContainer($instagramId, $accessToken, $containerId);
     }
@@ -417,14 +438,14 @@ class InstagramPublisher
             $this->waitForMediaProcessing($childId, $accessToken, $workflow);
         }
 
-        $carouselId = $this->createContainer($instagramId, [
+        $carouselId = $this->createContainer($instagramId, $this->withLocation([
             'media_type' => 'CAROUSEL',
             'caption' => $content,
             'children' => implode(',', $childContainers),
             'access_token' => $accessToken,
             ...$this->sharedOptions(),
             ...$this->collaboratorsParam(),
-        ], 'carousel container');
+        ]), 'carousel container');
 
         return $this->finishContainer($instagramId, $accessToken, $carouselId);
     }
