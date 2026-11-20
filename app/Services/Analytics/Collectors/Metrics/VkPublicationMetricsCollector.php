@@ -39,7 +39,7 @@ class VkPublicationMetricsCollector extends AbstractPublicationMetricsCollector
 
         if (! is_array($post)) {
             // wall.getById answers 200 with an empty list for a deleted post.
-            throw AnalyticsCollectionException::gone('VK post no longer exists');
+            throw new AnalyticsCollectionException('malformed', 'VK post no longer exists', gone: true);
         }
 
         return $this->observation($date, $this->withEngagements($this->present([

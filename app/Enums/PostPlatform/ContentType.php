@@ -110,7 +110,7 @@ enum ContentType: string
             self::ThreadsPost, self::ThreadsGhostPost,
             self::PinterestPin, self::PinterestVideoPin, self::PinterestCarousel,
             self::BlueskyPost, self::MastodonPost, self::TelegramPost, self::DiscordMessage,
-            self::GoogleBusinessPost => null,
+            self::GoogleBusinessPost, self::VkPost => null,
         };
     }
 
